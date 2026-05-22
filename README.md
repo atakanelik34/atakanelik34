@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./assets/rearc-agent-layer.svg" alt="Atakan Elik — ReARC Labs agent infrastructure" width="100%" />
+  <img src="./assets/rearc-agent-layer.png" alt="Atakan Elik — ReARC Labs agent infrastructure" width="100%" />
 </div>
 
 <br />
