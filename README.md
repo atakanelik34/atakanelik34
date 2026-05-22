@@ -84,6 +84,14 @@ company layer     Compaly     AI-native company operations
 
 ## Selected public work
 
+<p>
+  <a href="https://pepy.tech/projects/bilinc">
+    <img alt="Bilinc PyPI downloads" src="https://static.pepy.tech/badge/bilinc" />
+  </a>
+  <img alt="Hugging Face Istanbul speaker" src="https://img.shields.io/badge/Hugging%20Face%20Istanbul-speaker-FFD21E?style=flat-square&logo=huggingface&logoColor=111827" />
+  <img alt="Claude Partner Network initial review cleared" src="https://img.shields.io/badge/Claude%20Partner%20Network-initial%20review%20cleared-0B1220?style=flat-square" />
+</p>
+
 <a href="https://github.com/atakanelik34/clawifi">
   <img align="center" src="https://github-readme-stats.vercel.app/api/pin/?username=atakanelik34&repo=clawifi&theme=github_dark&hide_border=true&bg_color=0B1220&title_color=E5E7EB&text_color=9CA3AF&icon_color=22C55E" />
 </a>
