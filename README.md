@@ -31,6 +31,8 @@ Verifiable agent memory and state.
 - provenance-aware memory
 - local-first agent brain
 
+[Website →](https://bilinc.space) · [GitHub →](https://github.com/atakanelik34/Bilinc)
+
 </td>
 <td width="33%" valign="top">
 
@@ -42,7 +44,7 @@ Internet gateway for AI agents.
 - structured extraction
 - OSINT and MCP tools
 
-[Public repo →](https://github.com/atakanelik34/clawifi)
+[Website →](https://clawifi.qzz.io)
 
 </td>
 <td width="33%" valign="top">
@@ -54,6 +56,8 @@ Reputation and accountability for autonomous agents.
 - AgentID and operator binding
 - signed scorecards
 - execution receipts
+
+[Website →](https://ares-protocol.xyz)
 
 </td>
 </tr>
@@ -68,6 +72,14 @@ trust layer       ARES        reputation, scorecards, execution accountability
 product layer     Docly       document intelligence and workflow automation
 company layer     Compaly     AI-native company operations
 ```
+
+## Product surfaces
+
+- [ReARC Labs](https://rearclabs.com) — trust infrastructure for autonomous agents
+- [Bilinc](https://bilinc.space) — verifiable memory for AI agents
+- [ARES Protocol](https://ares-protocol.xyz) — trust and accountability for autonomous agents
+- [Docly](https://docly.work) — file tools for humans and agents
+- [Clawifi](https://clawifi.qzz.io) — web research and data collection for agents
 
 ## Stack I keep close
 
@@ -92,8 +104,8 @@ company layer     Compaly     AI-native company operations
   <img alt="Claude Partner Network initial review cleared" src="https://img.shields.io/badge/Claude%20Partner%20Network-initial%20review%20cleared-0B1220?style=flat-square" />
 </p>
 
-<a href="https://github.com/atakanelik34/clawifi">
-  <img align="center" src="https://github-readme-stats.vercel.app/api/pin/?username=atakanelik34&repo=clawifi&theme=github_dark&hide_border=true&bg_color=0B1220&title_color=E5E7EB&text_color=9CA3AF&icon_color=22C55E" />
+<a href="https://github.com/atakanelik34/Bilinc">
+  <img align="center" src="https://github-readme-stats.vercel.app/api/pin/?username=atakanelik34&repo=Bilinc&theme=github_dark&hide_border=true&bg_color=0B1220&title_color=E5E7EB&text_color=9CA3AF&icon_color=22C55E" />
 </a>
 
 <br />
