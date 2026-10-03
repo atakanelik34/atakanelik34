@@ -5,10 +5,12 @@ Run with:  uvicorn idp.main:create_app --factory
 
 from __future__ import annotations
 
+import hmac
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Annotated
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, Header, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from idp.api.errors import register_error_handlers
@@ -30,7 +32,10 @@ from idp.api.routes import (
 from idp.api.routes import storage as storage_routes
 from idp.config import Settings, StorageBackend, get_settings
 from idp.container import Container
+from idp.domain.errors import AuthenticationError
 from idp.infrastructure.logging import configure_logging, get_logger
+from idp.infrastructure.metrics import render
+from idp.infrastructure.telemetry import configure_tracing
 
 log = get_logger(__name__)
 
@@ -91,4 +96,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if settings.storage_backend is StorageBackend.LOCAL:
         api.include_router(storage_routes.router)
     app.include_router(api)
+    if settings.metrics_enabled:
+        token = settings.metrics_token.get_secret_value()
+
+        @app.get("/metrics", include_in_schema=False)
+        async def metrics(authorization: Annotated[str | None, Header()] = None) -> Response:
+            if token and not hmac.compare_digest(authorization or "", f"Bearer {token}"):
+                raise AuthenticationError("Metrics token required")
+            body, content_type = render()
+            return Response(body, media_type=content_type)
+
+    configure_tracing(app, settings)
     return app

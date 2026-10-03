@@ -87,6 +87,24 @@ class Settings(BaseSettings):
     probe_memory_limit_mb: int = Field(default=2048, ge=256)
     worker_tmp_dir: str | None = None
 
+    # --- Observability (phase 12) -----------------------------------------------
+    # Prometheus: API serves /metrics (not proxied by the frontend); workers serve
+    # their own on WORKER_METRICS_PORT. Optional bearer token for /metrics.
+    metrics_enabled: bool = True
+    metrics_token: SecretStr = SecretStr("")
+    worker_metrics_port: int = Field(default=9100, ge=1024, le=65535)
+    # OpenTelemetry tracing: enabled when an OTLP endpoint is set and the optional
+    # `otel` extra is installed.
+    otel_exporter_otlp_endpoint: str | None = None
+    otel_service_name: str = "idp"
+
+    # --- Malware scanning (phase 12) --------------------------------------------
+    # none: documents are recorded as not_scanned. clamav: clamd INSTREAM, fail closed.
+    malware_scanner: str = Field(default="none", pattern="^(none|clamav)$")
+    clamav_host: str = "clamav"
+    clamav_port: int = Field(default=3310, ge=1, le=65535)
+    clamav_timeout_seconds: float = Field(default=60.0, gt=0)
+
     # --- Digitization / OCR (phase 3) -------------------------------------------
     # "none" is honest: image-only pages are marked `ocr: not_configured`.
     ocr_engine: str = Field(default="none", pattern="^(none|tesseract|mock)$")
@@ -184,6 +202,9 @@ class Settings(BaseSettings):
     access_token_ttl_minutes: int = Field(default=30, ge=1, le=24 * 60)
     login_rate_limit_attempts: int = Field(default=10, ge=1)
     login_rate_limit_window_seconds: int = Field(default=300, ge=10)
+    # Per authenticated principal (user or API key), fixed one-minute windows.
+    api_rate_limit_per_minute: int = Field(default=600, ge=1)
+    upload_rate_limit_per_minute: int = Field(default=120, ge=1)
 
     @model_validator(mode="before")
     @classmethod

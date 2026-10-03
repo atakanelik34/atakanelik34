@@ -1,0 +1,105 @@
+"""Phase 12: malware verdicts at upload, rate limits, metrics, overview, tracing."""
+
+import io
+import uuid
+
+import httpx
+from fastapi import FastAPI
+
+from idp.application.jobs import RunOutcome
+from idp.container import Container
+from idp.domain.documents import ScanStatus
+from idp.infrastructure.scanning import ScannerUnavailableError, ScanVerdict
+from idp.infrastructure.telemetry import configure_tracing
+from tests.conftest import make_settings
+from tests.fixtures import files
+from tests.integration.conftest import TenantFixture, login, upload
+
+
+class FixedScanner:
+    name = "clamav"
+
+    def __init__(self, verdict: ScanVerdict | None) -> None:
+        self.verdict = verdict
+
+    async def scan(self, data: io.BytesIO) -> ScanVerdict:
+        if self.verdict is None:
+            raise ScannerUnavailableError("Malware scanner unavailable")
+        return self.verdict
+
+
+async def test_infected_uploads_are_refused_and_audited(
+    client: httpx.AsyncClient, acme: TenantFixture, container: Container
+) -> None:
+    headers = await login(client, acme.owner_email, acme.owner_password)
+    container.scanner = FixedScanner(
+        ScanVerdict(ScanStatus.INFECTED, "clamav", "Eicar-Test-Signature")
+    )
+    refused = await upload(client, headers, files.native_pdf())
+    assert refused.status_code == 422
+    audit = (
+        await client.get("/api/v1/audit-logs?action=document.malware_rejected", headers=headers)
+    ).json()
+    assert audit["items"][0]["after"]["signature"] == "Eicar-Test-Signature"
+    assert (await client.get("/api/v1/documents", headers=headers)).json()["items"] == []
+
+    container.scanner = FixedScanner(None)
+    unavailable = await upload(client, headers, files.native_pdf())
+    assert unavailable.status_code == 503
+
+    container.scanner = FixedScanner(ScanVerdict(ScanStatus.CLEAN, "clamav"))
+    accepted = await upload(client, headers, files.native_pdf())
+    assert accepted.status_code == 201
+    detail = (
+        await client.get(f"/api/v1/documents/{accepted.json()['document']['id']}", headers=headers)
+    ).json()
+    assert detail["scan_status"] == "clean"
+
+
+async def test_per_principal_rate_limit(
+    client: httpx.AsyncClient, acme: TenantFixture, container: Container
+) -> None:
+    headers = await login(client, acme.owner_email, acme.owner_password)
+    container.api_limiter._limit = 3
+    statuses = [
+        (await client.get("/api/v1/documents", headers=headers)).status_code for _ in range(5)
+    ]
+    assert statuses[:3] == [200, 200, 200]
+    assert statuses[3] == 429
+    limited = await client.get("/api/v1/documents", headers=headers)
+    assert int(limited.headers["Retry-After"]) >= 1
+
+
+async def test_metrics_and_overview(
+    client: httpx.AsyncClient, acme: TenantFixture, make_runner
+) -> None:  # type: ignore[no-untyped-def]
+    headers = await login(client, acme.owner_email, acme.owner_password)
+    body = (await upload(client, headers, files.native_pdf())).json()
+    assert await make_runner().run(uuid.UUID(body["job_id"])) in {
+        RunOutcome.SUCCEEDED,
+        RunOutcome.WAITING_FOR_REVIEW,
+    }
+    await client.get(f"/api/v1/documents/{body['document']['id']}", headers=headers)
+    metrics = (await client.get("/metrics")).text
+    assert (
+        'idp_http_requests_total{method="GET",route="/documents/{document_id}",status="2xx"}'
+        in metrics
+    )
+    assert body["document"]["id"] not in metrics  # ids never become labels
+
+    overview = (await client.get("/api/v1/system/overview", headers=headers)).json()
+    assert sum(overview["documents"].values()) == 1
+    assert overview["window_days"] == 30
+    assert overview["llm"] == {"calls": 0, "cost": 0.0, "tokens": 0}
+
+
+async def test_metrics_token_and_tracing_off_by_default(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from idp.main import create_app
+
+    settings = make_settings(tmp_path, metrics_token="scrape-secret-123")
+    app = create_app(settings)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        assert (await c.get("/metrics")).status_code == 401
+        ok = await c.get("/metrics", headers={"Authorization": "Bearer scrape-secret-123"})
+        assert ok.status_code == 200
+    assert configure_tracing(FastAPI(), settings) is False

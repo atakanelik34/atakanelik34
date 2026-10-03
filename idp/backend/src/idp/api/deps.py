@@ -13,6 +13,7 @@ from idp.application.auth import AuthService
 from idp.container import Container
 from idp.domain.errors import AuthenticationError, AuthorizationError
 from idp.domain.identity import Permission, Principal
+from idp.infrastructure.db.tenancy import bind_tenant
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -40,13 +41,22 @@ def get_auth_service(container: ContainerDep, session: SessionDep) -> AuthServic
 AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
 
 
+def rate_identity(principal: Principal) -> str:
+    return f"key:{principal.api_key_id}" if principal.api_key_id else f"user:{principal.user_id}"
+
+
 async def get_principal(
     auth: AuthServiceDep,
+    container: ContainerDep,
+    session: SessionDep,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
 ) -> Principal:
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise AuthenticationError("Authentication required")
-    return await auth.authenticate(credentials.credentials)
+    principal = await auth.authenticate(credentials.credentials)
+    await container.api_limiter.hit(rate_identity(principal))
+    await bind_tenant(session, principal.tenant_id)
+    return principal
 
 
 PrincipalDep = Annotated[Principal, Depends(get_principal)]

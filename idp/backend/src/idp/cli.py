@@ -18,9 +18,26 @@ import sys
 from idp.application.users import TenantBootstrapService
 from idp.config import get_database_settings
 from idp.domain.errors import IDPError
+from idp.infrastructure.db.roles import provision_app_role
 from idp.infrastructure.db.session import create_engine, create_session_factory
 
 PASSWORD_ENV = "IDP_BOOTSTRAP_PASSWORD"  # noqa: S105 — env var name, not a value
+APP_ROLE_PASSWORD_ENV = "POSTGRES_APP_PASSWORD"  # noqa: S105 — env var name, not a value
+
+
+async def _provision(args: argparse.Namespace) -> int:
+    password = os.environ.get(APP_ROLE_PASSWORD_ENV, "")
+    engine = create_engine(get_database_settings())
+    try:
+        async with engine.begin() as conn:
+            outcome = await provision_app_role(conn, args.role, password)
+    except (ValueError, RuntimeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        await engine.dispose()
+    print(f"runtime role '{args.role}' {outcome}")
+    return 0
 
 
 async def _bootstrap(args: argparse.Namespace, password: str) -> int:
@@ -71,10 +88,17 @@ def main(argv: list[str] | None = None) -> int:
     boot.add_argument(
         "--if-missing", action="store_true", help="exit 0 if the tenant or user already exists"
     )
+    roles = sub.add_parser(
+        "provision-db-roles",
+        help=f"create/update the runtime DB role (password from {APP_ROLE_PASSWORD_ENV})",
+    )
+    roles.add_argument("--role", default="idp_app")
     args = parser.parse_args(argv)
 
     if args.command == "bootstrap":
         return asyncio.run(_bootstrap(args, _read_password()))
+    if args.command == "provision-db-roles":
+        return asyncio.run(_provision(args))
     return 2
 
 

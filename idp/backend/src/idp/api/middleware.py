@@ -10,6 +10,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from idp.context import client_ip_var, correlation_id_var, sanitize_correlation_id
 from idp.infrastructure.logging import get_logger
+from idp.infrastructure.metrics import observe_http
 
 CORRELATION_HEADER = "X-Correlation-ID"
 
@@ -67,6 +68,13 @@ class RequestContextMiddleware:
             await self.app(scope, receive, send_wrapper)
         finally:
             path = scope.get("path", "")
+            route = scope.get("route")
+            observe_http(
+                str(scope.get("method", "")),
+                getattr(route, "path", "unmatched"),
+                status_code,
+                time.perf_counter() - started,
+            )
             if path not in self._quiet:
                 # Path only — never the query string, which may carry signatures.
                 log.info(

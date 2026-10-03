@@ -25,9 +25,16 @@ dependencies = [
     "pypdfium2>=4.30",
     "pillow>=11",
     "regex>=2024.9",
+    "prometheus-client>=0.21",
 ]
 
 [project.optional-dependencies]
+# Optional tracing: set OTEL_EXPORTER_OTLP_ENDPOINT to enable.
+otel = [
+    "opentelemetry-sdk>=1.27",
+    "opentelemetry-exporter-otlp-proto-http>=1.27",
+    "opentelemetry-instrumentation-fastapi>=0.48b0",
+]
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
@@ -75,7 +82,7 @@ mypy_path = "src"
 packages = ["idp"]
 
 [[tool.mypy.overrides]]
-module = ["arq.*", "moto.*", "pypdfium2.*"]
+module = ["arq.*", "moto.*", "pypdfium2.*", "opentelemetry.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

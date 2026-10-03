@@ -13,7 +13,8 @@ x-app-env: &app-env
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
   LOG_FORMAT: ${LOG_FORMAT:-json}
   API_DOCS_ENABLED: ${API_DOCS_ENABLED:-true}
-  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-idp}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-idp}
+  # Runtime role: owns no tables and is subject to row-level security.
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_APP_USER:-idp_app}:${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-idp}
   REDIS_URL: redis://redis:6379/0
   STORAGE_BACKEND: s3
   STORAGE_BUCKET: ${STORAGE_BUCKET:-idp-documents}
@@ -151,8 +152,12 @@ services:
 
   migrate:
     <<: *backend
-    command: ["alembic", "upgrade", "head"]
-    environment: *db-env
+    # Migrations run as the owner role, then (re)provision the runtime role.
+    command: ["sh", "-c", "alembic upgrade head && idp provision-db-roles --role \"$$POSTGRES_APP_USER\""]
+    environment:
+      <<: *db-env
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER:-idp_app}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD in .env}
     restart: "no"
     depends_on:
       postgres:

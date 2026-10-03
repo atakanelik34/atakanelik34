@@ -165,6 +165,21 @@ class IngestionService:
         verdict = await self._scanner.scan(incoming.stream)
         incoming.stream.seek(0)
         if verdict.status is ScanStatus.INFECTED:
+            record_audit(
+                self._session,
+                action=AuditAction.DOCUMENT_MALWARE_REJECTED,
+                entity_type=AuditEntity.DOCUMENT,
+                entity_id=None,
+                tenant_id=principal.tenant_id,
+                actor=principal,
+                after={
+                    "filename": sanitize_filename(incoming.filename),
+                    "sha256": fp.sha256,
+                    "scanner": verdict.scanner,
+                    "signature": verdict.signature,
+                },
+            )
+            await self._session.commit()
             raise DocumentError("File rejected by malware scanner")
 
         existing = await self._find_duplicate(principal, project, fp.sha256)

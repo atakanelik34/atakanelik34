@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GENERATED = (
     "JWT_SECRET",
     "POSTGRES_PASSWORD",
+    "POSTGRES_APP_PASSWORD",
     "MINIO_ROOT_PASSWORD",
     "S3_APP_SECRET_KEY",
     "IDP_BOOTSTRAP_PASSWORD",

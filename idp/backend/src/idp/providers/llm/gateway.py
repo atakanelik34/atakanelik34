@@ -22,6 +22,7 @@ from dataclasses import dataclass, replace
 from idp.domain.errors import ConfigurationError, PolicyViolationError, ProviderError
 from idp.domain.routing import Locality, PolicySnapshot
 from idp.infrastructure.logging import get_logger
+from idp.infrastructure.metrics import LLM_CALLS, LLM_TOKENS
 from idp.providers.llm.base import LLMCallError, LLMProvider, LLMRequest, LLMResponse, host_of
 from idp.providers.resilience import BreakerRegistry
 
@@ -113,6 +114,24 @@ class LLMGateway:
         )
 
     async def complete(
+        self,
+        name: str,
+        request: LLMRequest,
+        *,
+        policy: PolicySnapshot,
+        purpose: str,
+        sink: list[CallRecord],
+    ) -> LLMResponse:
+        before = len(sink)
+        try:
+            return await self._complete(name, request, policy=policy, purpose=purpose, sink=sink)
+        finally:
+            for call in sink[before:]:
+                LLM_CALLS.labels(call.provider, call.purpose, call.status).inc()
+                LLM_TOKENS.labels(call.provider, "input").inc(call.input_tokens)
+                LLM_TOKENS.labels(call.provider, "output").inc(call.output_tokens)
+
+    async def _complete(
         self,
         name: str,
         request: LLMRequest,

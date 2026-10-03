@@ -17,7 +17,7 @@ from idp.config import Settings
 from idp.infrastructure.db.session import check_database, create_engine, create_session_factory
 from idp.infrastructure.queue.jobs import ArqJobQueue
 from idp.infrastructure.queue.redis import check_redis, check_workers, create_redis
-from idp.infrastructure.scanning import MalwareScanner, NoMalwareScanner
+from idp.infrastructure.scanning import ClamdScanner, MalwareScanner, NoMalwareScanner
 from idp.infrastructure.security.rate_limit import RedisRateLimiter
 from idp.infrastructure.security.tokens import TokenService
 from idp.infrastructure.storage.base import ObjectStorageProvider
@@ -36,6 +36,8 @@ class Container:
     scheduler: JobScheduler
     tokens: TokenService
     login_limiter: RedisRateLimiter
+    api_limiter: RedisRateLimiter
+    upload_limiter: RedisRateLimiter
     health: HealthService
 
     @classmethod
@@ -49,7 +51,13 @@ class Container:
             session_factory=create_session_factory(engine),
             redis=redis,
             storage=storage,
-            scanner=NoMalwareScanner(),
+            scanner=ClamdScanner(
+                settings.clamav_host,
+                settings.clamav_port,
+                timeout_seconds=settings.clamav_timeout_seconds,
+            )
+            if settings.malware_scanner == "clamav"
+            else NoMalwareScanner(),
             scheduler=JobScheduler(ArqJobQueue(redis), settings),
             tokens=TokenService(settings),
             login_limiter=RedisRateLimiter(
@@ -57,6 +65,15 @@ class Container:
                 namespace="login",
                 limit=settings.login_rate_limit_attempts,
                 window_seconds=settings.login_rate_limit_window_seconds,
+            ),
+            api_limiter=RedisRateLimiter(
+                redis, namespace="api", limit=settings.api_rate_limit_per_minute, window_seconds=60
+            ),
+            upload_limiter=RedisRateLimiter(
+                redis,
+                namespace="upload",
+                limit=settings.upload_rate_limit_per_minute,
+                window_seconds=60,
             ),
             health=HealthService(
                 critical={

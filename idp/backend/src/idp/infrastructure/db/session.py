@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+import idp.infrastructure.db.tenancy  # noqa: F401 — registers the RLS session hook
 from idp.config import DatabaseSettings, Settings
 from idp.domain.health import ComponentHealth, HealthStatus
 

@@ -30,6 +30,7 @@ class AuditAction(StrEnum):
     USER_CREATED = "user.created"
     TENANT_BOOTSTRAPPED = "tenant.bootstrapped"
     DOCUMENT_RECEIVED = "document.received"
+    DOCUMENT_MALWARE_REJECTED = "document.malware_rejected"
     DOCUMENT_DUPLICATE_REJECTED = "document.duplicate_rejected"
     DOCUMENT_STATUS_CHANGED = "document.status_changed"
     DOCUMENT_DOWNLOADED = "document.downloaded"

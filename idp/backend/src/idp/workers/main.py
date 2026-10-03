@@ -19,6 +19,7 @@ from typing import Any, ClassVar
 
 from arq import cron, func
 from arq.connections import RedisSettings
+from prometheus_client import start_http_server
 
 from idp.application.jobs import JobRunner, JobScheduler, JobSweeper
 from idp.application.outbox import OutboxRelay
@@ -35,6 +36,7 @@ from idp.application.workflows import StepHandler
 from idp.config import Settings, get_settings
 from idp.infrastructure.db.session import create_engine, create_session_factory
 from idp.infrastructure.logging import configure_logging, get_logger
+from idp.infrastructure.metrics import JOB_LATENCY, JOBS, OUTBOX_PUBLISHED, REGISTRY
 from idp.infrastructure.queue.jobs import PROCESS_JOB_FUNCTION, ArqJobQueue
 from idp.infrastructure.queue.presence import PresencePublisher
 from idp.infrastructure.queue.redis import WorkerHeartbeat, arq_redis_settings, create_redis
@@ -140,6 +142,13 @@ async def startup(ctx: dict[str, Any]) -> None:
         max_attempts=_settings.outbox_max_attempts,
     )
 
+    if _settings.metrics_enabled:
+        # One port per worker container; scale workers as separate containers.
+        try:
+            start_http_server(_settings.worker_metrics_port, registry=REGISTRY)
+        except OSError:
+            log.warning("worker.metrics_port_in_use", port=_settings.worker_metrics_port)
+
     hostname = socket.gethostname()
     now = time.time()
     presence = PresencePublisher(
@@ -178,13 +187,18 @@ async def shutdown(ctx: dict[str, Any]) -> None:
 
 async def process_job(ctx: dict[str, Any], job_id: str) -> str:
     runner: JobRunner = ctx["runner"]
+    started = time.perf_counter()
     outcome = await runner.run(uuid.UUID(job_id))
+    JOBS.labels(outcome.value).inc()
+    JOB_LATENCY.observe(time.perf_counter() - started)
     return outcome.value
 
 
 async def relay_outbox(ctx: dict[str, Any]) -> int:
     relay: OutboxRelay = ctx["outbox"]
-    return await relay.relay()
+    published = await relay.relay()
+    OUTBOX_PUBLISHED.inc(published)
+    return published
 
 
 async def sweep_jobs(ctx: dict[str, Any]) -> int:
