@@ -12,17 +12,21 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from idp.config import Settings
+from idp.config import DatabaseSettings, Settings
 from idp.domain.health import ComponentHealth, HealthStatus
 
 
-def create_engine(settings: Settings) -> AsyncEngine:
+def create_engine(settings: Settings | DatabaseSettings) -> AsyncEngine:
+    pool: dict[str, int] = (
+        {"pool_size": settings.database_pool_size, "max_overflow": settings.database_max_overflow}
+        if isinstance(settings, Settings)
+        else {}
+    )
     return create_async_engine(
         settings.database_url.get_secret_value(),
-        pool_size=settings.database_pool_size,
-        max_overflow=settings.database_max_overflow,
         pool_pre_ping=True,
         echo=settings.database_echo,
+        **pool,
     )
 
 

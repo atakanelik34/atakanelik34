@@ -16,7 +16,7 @@ import os
 import sys
 
 from idp.application.users import TenantBootstrapService
-from idp.config import get_settings
+from idp.config import get_database_settings
 from idp.domain.errors import IDPError
 from idp.infrastructure.db.session import create_engine, create_session_factory
 
@@ -24,7 +24,7 @@ PASSWORD_ENV = "IDP_BOOTSTRAP_PASSWORD"  # noqa: S105 — env var name, not a va
 
 
 async def _bootstrap(args: argparse.Namespace, password: str) -> int:
-    engine = create_engine(get_settings())
+    engine = create_engine(get_database_settings())
     try:
         async with create_session_factory(engine)() as session:
             result = await TenantBootstrapService(session).bootstrap(

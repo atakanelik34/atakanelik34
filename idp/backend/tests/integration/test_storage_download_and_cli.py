@@ -30,7 +30,7 @@ async def test_local_signed_download(client: httpx.AsyncClient, container: Conta
 @pytest.mark.usefixtures("container")
 def test_cli_bootstrap_is_idempotent_with_if_missing() -> None:
     env = {
-        **os.environ,
+        **{k: v for k, v in os.environ.items() if k != "JWT_SECRET"},
         "DATABASE_URL": os.environ["TEST_DATABASE_URL"],
         "IDP_BOOTSTRAP_PASSWORD": "Cli-Bootstrap-Pass-1!",
     }

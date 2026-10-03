@@ -9,7 +9,7 @@ from alembic import context
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from idp.config import get_settings
+from idp.config import get_database_settings
 from idp.infrastructure.db import models  # noqa: F401 — registers all tables
 from idp.infrastructure.db.base import Base
 
@@ -23,7 +23,7 @@ target_metadata = Base.metadata
 def _database_url() -> str:
     # Allow `alembic -x url=...` for tests; default to application settings.
     return context.get_x_argument(as_dictionary=True).get("url") or (
-        get_settings().database_url.get_secret_value()
+        get_database_settings().database_url.get_secret_value()
     )
 
 

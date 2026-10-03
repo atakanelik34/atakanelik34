@@ -1,8 +1,13 @@
-"""Document processing lifecycle state machine.
+"""Document lifecycle and processing-job state machines.
 
 Pure domain logic: no I/O. The application layer persists the returned
 `StatusTransition` (status column + audit log) in the same transaction.
 See ARCHITECTURE.md §4.
+
+The document status is deliberately coarse and independent of which steps a
+workflow contains: per-step progress lives on processing jobs and steps, so
+configurable workflows (skip classification, add custom steps) never require a
+new document status.
 """
 
 from __future__ import annotations
@@ -17,64 +22,34 @@ from idp.domain.errors import InvalidStateTransitionError
 class DocumentStatus(StrEnum):
     RECEIVED = "RECEIVED"
     QUEUED = "QUEUED"
-    DIGITIZING = "DIGITIZING"
-    DIGITIZED = "DIGITIZED"
-    CLASSIFYING = "CLASSIFYING"
-    CLASSIFIED = "CLASSIFIED"
-    EXTRACTING = "EXTRACTING"
-    EXTRACTED = "EXTRACTED"
-    VALIDATING = "VALIDATING"
+    PROCESSING = "PROCESSING"
     WAITING_FOR_HUMAN = "WAITING_FOR_HUMAN"
-    VALIDATED = "VALIDATED"
-    ENRICHING = "ENRICHING"
     READY_FOR_ACTION = "READY_FOR_ACTION"
-    EXECUTING_ACTIONS = "EXECUTING_ACTIONS"
     COMPLETED = "COMPLETED"
-    RETRYING = "RETRYING"
     FAILED = "FAILED"
     REJECTED = "REJECTED"
 
 
 S = DocumentStatus
 
-# States in which a worker is actively doing something; these may fail or retry.
-IN_PROGRESS_STATES: frozenset[DocumentStatus] = frozenset(
-    {S.DIGITIZING, S.CLASSIFYING, S.EXTRACTING, S.VALIDATING, S.ENRICHING, S.EXECUTING_ACTIONS}
+# Statuses a document can be reprocessed from (always as a *new* job/run).
+REPROCESSABLE: frozenset[DocumentStatus] = frozenset(
+    {S.COMPLETED, S.FAILED, S.REJECTED, S.WAITING_FOR_HUMAN}
 )
 
-TERMINAL_STATES: frozenset[DocumentStatus] = frozenset({S.COMPLETED, S.REJECTED, S.FAILED})
-
-_HAPPY_PATH: dict[DocumentStatus, frozenset[DocumentStatus]] = {
+ALLOWED_TRANSITIONS: dict[DocumentStatus, frozenset[DocumentStatus]] = {
+    # RECEIVED -> REJECTED: refused by an ingestion policy (e.g. malware verdict).
     S.RECEIVED: frozenset({S.QUEUED, S.REJECTED}),
-    S.QUEUED: frozenset({S.DIGITIZING}),
-    S.DIGITIZING: frozenset({S.DIGITIZED}),
-    S.DIGITIZED: frozenset({S.CLASSIFYING}),
-    S.CLASSIFYING: frozenset({S.CLASSIFIED}),
-    S.CLASSIFIED: frozenset({S.EXTRACTING}),
-    S.EXTRACTING: frozenset({S.EXTRACTED}),
-    S.EXTRACTED: frozenset({S.VALIDATING}),
-    S.VALIDATING: frozenset({S.VALIDATED, S.WAITING_FOR_HUMAN}),
-    S.WAITING_FOR_HUMAN: frozenset({S.VALIDATING, S.QUEUED, S.REJECTED}),
-    S.VALIDATED: frozenset({S.ENRICHING, S.READY_FOR_ACTION}),
-    S.ENRICHING: frozenset({S.READY_FOR_ACTION, S.WAITING_FOR_HUMAN}),
-    S.READY_FOR_ACTION: frozenset({S.EXECUTING_ACTIONS, S.COMPLETED}),
-    S.EXECUTING_ACTIONS: frozenset({S.COMPLETED}),
-    S.RETRYING: frozenset({S.QUEUED, S.FAILED}),
-    # Terminal states only leave via an explicit reprocess, which starts a new run.
-    S.FAILED: frozenset({S.QUEUED}),
+    S.QUEUED: frozenset({S.PROCESSING}),
+    # Retries keep the document PROCESSING; the job carries the retry state.
+    S.PROCESSING: frozenset({S.WAITING_FOR_HUMAN, S.READY_FOR_ACTION, S.COMPLETED, S.FAILED}),
+    # Review resumes the same job (-> PROCESSING), sends back (-> QUEUED) or rejects.
+    S.WAITING_FOR_HUMAN: frozenset({S.PROCESSING, S.QUEUED, S.REJECTED}),
+    S.READY_FOR_ACTION: frozenset({S.PROCESSING, S.COMPLETED}),
     S.COMPLETED: frozenset({S.QUEUED}),
+    S.FAILED: frozenset({S.QUEUED}),
     S.REJECTED: frozenset({S.QUEUED}),
 }
-
-
-def _build_transitions() -> dict[DocumentStatus, frozenset[DocumentStatus]]:
-    table = dict(_HAPPY_PATH)
-    for state in IN_PROGRESS_STATES:
-        table[state] = table[state] | {S.RETRYING, S.FAILED}
-    return table
-
-
-ALLOWED_TRANSITIONS: dict[DocumentStatus, frozenset[DocumentStatus]] = _build_transitions()
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,3 +84,25 @@ def transition(
 def is_human_intervention(status: DocumentStatus) -> bool:
     """Waiting for a human is a normal lifecycle state, not a failure."""
     return status is S.WAITING_FOR_HUMAN
+
+
+class JobStatus(StrEnum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    RETRY_SCHEDULED = "RETRY_SCHEDULED"
+    SUCCEEDED = "SUCCEEDED"
+    # Non-retryable error (e.g. corrupted document): retrying cannot help.
+    FAILED = "FAILED"
+    # Retryable error, but attempts exhausted: needs operator attention / replay.
+    DEAD_LETTERED = "DEAD_LETTERED"
+
+
+ACTIVE_JOB_STATUSES: frozenset[JobStatus] = frozenset(
+    {JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.RETRY_SCHEDULED}
+)
+
+
+class StepStatus(StrEnum):
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"

@@ -37,13 +37,14 @@ make up         # docker compose up --build -d
 ```
 
 * UI: <http://localhost:8080> — sign in with the credentials `make env` printed
-* API docs (OpenAPI): <http://localhost:8000/api/v1/docs>
+* API docs (OpenAPI): <http://localhost:8080/api/v1/docs> (the API is reached only through the frontend proxy; its port is not published)
 * MinIO console: <http://localhost:9001>
 
 Without `make`: `python3 scripts/gen-env.py && docker compose up --build`.
 
-Services: `postgres`, `redis`, `minio`, `migrate` (one-shot `alembic upgrade
-head`), `bootstrap` (one-shot, creates the first tenant/owner if
+Services: `postgres`, `redis`, `minio`, `minio-init` (one-shot: bucket plus a
+bucket-scoped app user, so the API never holds MinIO root credentials),
+`migrate` (one-shot `alembic upgrade head`, receives only `DATABASE_URL`), `bootstrap` (one-shot, creates the first tenant/owner if
 `IDP_BOOTSTRAP_PASSWORD` is set; idempotent), `api`, `worker`, `frontend`
 (nginx serving the SPA and proxying `/api`). An optional local LLM runtime is
 available with `docker compose --profile llm up` (used from phase 9).
@@ -51,9 +52,11 @@ available with `docker compose --profile llm up` (used from phase 9).
 Scale workers horizontally with `docker compose up -d --scale worker=3`; each
 one shows up on the dashboard with its own heartbeat.
 
-> **MinIO image.** The upstream `minio/minio` image is no longer published on
-> Docker Hub, so Compose defaults to the pinned `bitnamilegacy/minio` build.
-> Set `MINIO_IMAGE` to use another S3-compatible server or a mirror you trust.
+> **MinIO image (development only).** The upstream `minio/minio` image is no
+> longer published on Docker Hub, so Compose defaults to the pinned, unmaintained
+> `bitnamilegacy/minio` build. Fine for local development; set `MINIO_IMAGE` to
+> another S3-compatible server or a mirror you trust. Production should use real
+> S3 or a maintained S3-compatible store (see below).
 
 ### Building behind a TLS-intercepting proxy
 
@@ -65,6 +68,21 @@ EXTRA_CA_CERT=/path/to/corporate-ca.pem \
   docker compose -f docker-compose.yml -f docker-compose.proxy-ca.example.yml up --build
 ```
 
+## Production deployment notes
+
+The Compose file is a development stack. For production:
+
+* **Object storage:** AWS S3 (or a maintained S3-compatible service) with
+  bucket-scoped credentials, SSE (`S3_SSE`) and versioning; not the dev MinIO image.
+* **Database:** managed or replicated PostgreSQL; run migrations with a
+  migration role and the app with a runtime role that cannot alter
+  `audit_logs` (phase 12 adds the role split and row-level security).
+* **Network:** only the reverse proxy is public; set `FORWARDED_ALLOW_IPS` on
+  the API to the proxy's address/range so client IPs (rate limits, audit) can't
+  be spoofed. Terminate TLS at the ingress.
+* **Secrets:** injected per service by your secret manager — each service gets
+  only what it needs, as in the Compose file.
+
 ## Local development (without Docker)
 
 Backend (Python ≥ 3.11, PostgreSQL 16, Redis 7):
@@ -72,10 +90,10 @@ Backend (Python ≥ 3.11, PostgreSQL 16, Redis 7):
 ```bash
 cd idp/backend
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
-export JWT_SECRET=$(python3 -c "import secrets;print(secrets.token_urlsafe(48))")
 export DATABASE_URL=postgresql+asyncpg://idp:idp@localhost:5432/idp
+.venv/bin/alembic upgrade head                                   # needs only DATABASE_URL
+export JWT_SECRET=$(python3 -c "import secrets;print(secrets.token_urlsafe(48))")
 export REDIS_URL=redis://localhost:6379/0 STORAGE_BACKEND=local LOG_FORMAT=console
-.venv/bin/alembic upgrade head
 IDP_BOOTSTRAP_PASSWORD='choose-a-strong-one' .venv/bin/idp bootstrap \
   --tenant-slug demo --tenant-name "Demo" --email admin@demo.local --name "Admin"
 .venv/bin/uvicorn idp.main:create_app --factory --reload        # API on :8000

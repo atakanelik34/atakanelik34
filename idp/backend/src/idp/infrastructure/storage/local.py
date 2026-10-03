@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import BinaryIO
 from urllib.parse import quote
 
-from idp.domain.errors import InternalError, NotFoundError
+from idp.domain.errors import InternalError, NotFoundError, ValidationError
 from idp.domain.health import ComponentHealth, HealthStatus
 from idp.infrastructure.storage.base import StoredObject, validate_key
 
@@ -39,22 +39,45 @@ class LocalFilesystemStorage:
             path.parent.mkdir(parents=True, exist_ok=True)
             digest = hashlib.md5(usedforsecurity=False)
             tmp = path.with_suffix(path.suffix + ".partial")
+            written = 0
             with tmp.open("wb") as fh:
                 while chunk := data.read(_CHUNK):
+                    written += len(chunk)
+                    if written > size:
+                        break
                     digest.update(chunk)
                     fh.write(chunk)
+            if written != size:
+                tmp.unlink(missing_ok=True)
+                raise ValidationError("Stored object size does not match declared size")
             tmp.replace(path)
             return digest.hexdigest()
 
         etag = await asyncio.to_thread(_write)
         return StoredObject(key=key, size=size, content_type=content_type, etag=etag)
 
-    async def get(self, key: str) -> bytes:
+    async def download(self, key: str, dest: BinaryIO) -> int:
         path = self._path(key)
+
+        def _copy() -> int:
+            written = 0
+            with path.open("rb") as fh:
+                while chunk := fh.read(_CHUNK):
+                    dest.write(chunk)
+                    written += len(chunk)
+            return written
+
         try:
-            return await asyncio.to_thread(path.read_bytes)
+            return await asyncio.to_thread(_copy)
         except FileNotFoundError as exc:
             raise NotFoundError("Object not found") from exc
+
+    def path_for(self, key: str) -> Path:
+        """Filesystem path of an existing object (dev download route only)."""
+        path = self._path(key)
+        if not path.is_file():
+            raise NotFoundError("Object not found")
+        return path
 
     async def delete(self, key: str) -> None:
         path = self._path(key)

@@ -94,21 +94,22 @@ class S3ObjectStorage:
             raise ProviderError("Object storage write failed") from exc
         return StoredObject(key=key, size=size, content_type=content_type, etag=etag)
 
-    async def get(self, key: str) -> bytes:
+    async def download(self, key: str, dest: BinaryIO) -> int:
         validate_key(key)
+        start = dest.tell()
 
-        def _get() -> bytes:
-            body: bytes = self._client.get_object(Bucket=self._bucket, Key=key)["Body"].read()
-            return body
+        def _download() -> None:
+            self._client.download_fileobj(self._bucket, key, dest)
 
         try:
-            return await asyncio.to_thread(_get)
+            await asyncio.to_thread(_download)
         except ClientError as exc:
             if exc.response.get("Error", {}).get("Code") in _NOT_FOUND_CODES:
                 raise NotFoundError("Object not found") from exc
             raise ProviderError("Object storage read failed") from exc
         except BotoCoreError as exc:
             raise ProviderError("Object storage read failed") from exc
+        return dest.tell() - start
 
     async def delete(self, key: str) -> None:
         validate_key(key)

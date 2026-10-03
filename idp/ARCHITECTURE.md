@@ -179,9 +179,10 @@ Document                     the physical file as received
   metadata (jsonb), deleted_at
   UNIQUE (tenant_id, project_id, sha256) WHERE deleted_at IS NULL   → duplicate guard
 
-DocumentPage                 one row per page after digitization
+DocumentPage                 one row per page (probe in phase 2; digitization fills the rest)
   document_id, page_number, width, height, unit, rotation,
-  text_layer: native|ocr|hybrid|none, text_quality (0..1),
+  has_text_layer, char_count,                                  ← phase 2
+  text_layer: native|ocr|hybrid|none, text_quality (0..1),     ← phase 3
   language, ocr_confidence, layout_ref (storage key of the geometry JSON)
 
 DocumentPart                 a logical document inside a file (splitting result)
@@ -221,25 +222,31 @@ A `fields` table mirrors the published definition (flattened paths like
 ### 3.4 Processing
 
 ```
-ProcessingJob     document_id, workflow_version_id, priority, status, attempts,
-                  max_attempts, idempotency_key UNIQUE, next_attempt_at,
-                  last_error_category, last_error_message, correlation_id
-WorkflowRun       job_id, workflow_version_id, status, started_at, finished_at
-ProcessingStep    run_id, step_key (digitize|classify|split|extract|validate|enrich|review|action),
+ProcessingJob     one execution of a workflow on a document (= the "workflow run").
+                  document_id, workflow_key, workflow_version, pipeline_version, trigger,
+                  status (JobStatus), attempts, max_attempts, next_attempt_at,
+                  lease_expires_at, current_step, last_error_{category,code,message},
+                  correlation_id, requested_by_id, started_at, finished_at
+                  UNIQUE (document_id) WHERE status IN active set  → one active job per document
+                  (A separate workflow_runs table was dropped: job and run were 1:1.)
+ProcessingStep    job_id, step_key (probe|digitize|classify|split|extract|validate|enrich|review|action),
                   status, attempt, provider, model, provider_version,
                   started_at, duration_ms, route_trace (jsonb), metrics (jsonb),
                   error_category, error_message
-ExtractionResult  part_id, run_id, schema_version_id, provider, model, route, cost_estimate
-ExtractedField    result_id, path ("lines[2].total"), value (jsonb), normalized_value,
+ExtractionResult  part_id, job_id, schema_version_id, provider, model, route, cost_estimate
+ExtractedField    result_id, path, row_id?, value (jsonb), normalized_value,
                   confidence, provenance (jsonb), status: extracted|corrected|rejected
-ValidationResult  part_id, run_id, rule_id, field_path?, outcome: PASS|WARNING|FAIL|REQUIRES_HUMAN, message
+                  Repeating groups use STABLE ROW IDS, not array indexes:
+                  path "lines[].total" + row_id "r_7f3a". Inserting/deleting a line
+                  during review must not re-point corrections, provenance or ground truth.
+ValidationResult  part_id, job_id, rule_id, field_path?, outcome: PASS|WARNING|FAIL|REQUIRES_HUMAN, message
 ReviewTask        part_id, reason[], status: open|in_progress|approved|rejected|sent_back,
                   assignee_id, due_at
 ReviewAction      task_id, actor_id, action: accept|edit|reject|approve|send_back,
                   field_path?, original_value, corrected_value, reason, at
                   — doubles as the feedback dataset for evaluation/fine-tuning
-EnrichmentResult  part_id, run_id, provider, lookup_key, result (jsonb), matched, confidence
-ActionRun         part_id, run_id, action_key, status, idempotency_key UNIQUE, request_ref,
+EnrichmentResult  part_id, job_id, provider, lookup_key, result (jsonb), matched, confidence
+ActionRun         part_id, job_id, action_key, status, idempotency_key UNIQUE, request_ref,
                   response_ref, error
 ```
 
@@ -276,44 +283,45 @@ AuditLog                               tenant_id, actor_type, actor_id, action, 
 ## 4. Processing lifecycle (state machine)
 
 Implemented in `backend/src/idp/domain/lifecycle.py` (pure, unit tested).
-Every transition goes through `DocumentLifecycle.transition()`, which rejects
+Every transition goes through `lifecycle.transition()`, which rejects
 illegal moves and returns a `StatusTransition` record that the application
 layer persists into `audit_logs`.
+
+The document status is **coarse and independent of workflow steps**. Which
+steps exist (probe, digitize, classify, …) is a property of the workflow
+version; step progress lives on `processing_jobs` / `processing_steps`. This
+keeps configurable workflows from ever needing a new document status.
 
 ```mermaid
 stateDiagram-v2
     [*] --> RECEIVED
     RECEIVED --> QUEUED
-    QUEUED --> DIGITIZING
-    DIGITIZING --> DIGITIZED
-    DIGITIZED --> CLASSIFYING
-    CLASSIFYING --> CLASSIFIED
-    CLASSIFIED --> EXTRACTING
-    EXTRACTING --> EXTRACTED
-    EXTRACTED --> VALIDATING
-    VALIDATING --> WAITING_FOR_HUMAN : requires review
-    VALIDATING --> VALIDATED
-    WAITING_FOR_HUMAN --> VALIDATING : corrected / approved
-    WAITING_FOR_HUMAN --> QUEUED : sent back for reprocessing
+    RECEIVED --> REJECTED : ingestion policy (e.g. malware verdict)
+    QUEUED --> PROCESSING : worker claims job
+    PROCESSING --> COMPLETED
+    PROCESSING --> WAITING_FOR_HUMAN : review required
+    PROCESSING --> READY_FOR_ACTION : actions need approval
+    PROCESSING --> FAILED : non-retryable error or retries exhausted
+    WAITING_FOR_HUMAN --> PROCESSING : corrected / approved (same job resumes)
+    WAITING_FOR_HUMAN --> QUEUED : sent back (new job)
     WAITING_FOR_HUMAN --> REJECTED
-    VALIDATED --> ENRICHING
-    VALIDATED --> READY_FOR_ACTION : no enrichment configured
-    ENRICHING --> READY_FOR_ACTION
-    ENRICHING --> WAITING_FOR_HUMAN : enrichment mismatch
-    READY_FOR_ACTION --> EXECUTING_ACTIONS
-    READY_FOR_ACTION --> COMPLETED : no actions configured
-    EXECUTING_ACTIONS --> COMPLETED
-    note right of RETRYING
-      Any in-progress state (…ING) may go to RETRYING
-      or FAILED. RETRYING → QUEUED. FAILED → QUEUED
-      (manual reprocess). COMPLETED/REJECTED are terminal
-      except explicit reprocess (→ QUEUED, new run).
-    end note
+    READY_FOR_ACTION --> PROCESSING : actions execute
+    READY_FOR_ACTION --> COMPLETED
+    COMPLETED --> QUEUED : reprocess (new job)
+    FAILED --> QUEUED : replay (new job)
+    REJECTED --> QUEUED : reprocess (new job)
 ```
 
-* *Status* is coarse and user-facing; per-step detail lives in `processing_steps`.
-* For multi-part files the document status is the **least advanced** part status
-  (a file is `COMPLETED` only when every part is).
+Job status (`JobStatus`): `QUEUED → RUNNING → SUCCEEDED`, with
+`RUNNING → RETRY_SCHEDULED → RUNNING` for retryable errors,
+`RUNNING → FAILED` for non-retryable errors (e.g. corrupted file) and
+`RUNNING → DEAD_LETTERED` when retries are exhausted. While a job retries, the
+document stays `PROCESSING`. Step status: `RUNNING | SUCCEEDED | FAILED`.
+
+* Every document status change is written with an audit entry
+  (`document.status_changed`, before/after) in the same transaction.
+* For multi-part files (phase 4) the document status is derived from its parts:
+  `COMPLETED` only when every part is; any part waiting for review ⇒ `WAITING_FOR_HUMAN`.
 * Human review is tracked via `review_tasks`; `human_intervention_rate` is a metric.
 
 ---
@@ -332,22 +340,32 @@ class ProviderDescriptor:
     key: str                  # "native-pdf", "tesseract", "ollama", "mock-ocr"
     kind: ProviderKind        # digitization|ocr|classification|extraction|llm|enrichment|action
     version: str
-    locality: Locality
+    locality: Locality        # resolved from CONFIGURATION, never from the adapter class
     is_mock: bool             # surfaced in API/UI
     cost_model: CostModel     # per page / per 1k tokens / flat
 ```
+
+**Locality is a property of the configured endpoint, not of the adapter.** The
+same OpenAI-compatible adapter is `LOCAL` when pointed at an in-cluster vLLM and
+`CLOUD` when pointed at a public API. `ProviderConfig` declares locality
+explicitly; the gateway additionally refuses `LOCAL` configs whose endpoint host
+is not on the operator's allow-list of internal hosts, so a misconfigured
+"local" provider cannot leak documents.
 
 ### Storage (implemented, phase 1)
 
 ```python
 class ObjectStorageProvider(Protocol):
     async def put(self, key: str, data: BinaryIO, *, content_type: str, size: int) -> StoredObject
-    async def get(self, key: str) -> bytes
+    async def download(self, key: str, dest: BinaryIO) -> int     # streams; never whole-file in RAM
     async def delete(self, key: str) -> None
     async def exists(self, key: str) -> bool
-    async def signed_url(self, key: str, *, expires_in: int) -> str
+    async def signed_url(self, key: str, *, expires_in: int, filename: str | None = None) -> str
     async def check(self) -> ComponentHealth
 ```
+
+Browsers download originals through signed URLs directly from the object store;
+the API never proxies document bytes. Workers stream objects to a temp file.
 
 Keys are generated server-side (`tenants/{tenant_id}/documents/{uuid}/original`),
 validated against a strict pattern, and never derived from filenames.
@@ -448,7 +466,11 @@ class ActionProvider(Protocol):
     async def execute(self, req: ActionRequest) -> ActionResult    # req carries idempotency_key
 ```
 
-### Agent tools
+### Agent tools — DEFERRED (not before an LLM step needs tool calling)
+
+No step through phase 11 requires an LLM to call tools: enrichment lookups and
+actions are invoked by the deterministic workflow engine. The registry below is
+kept as the design for when an LLM step genuinely needs lookups mid-reasoning.
 
 ```python
 @dataclass(frozen=True)
@@ -469,9 +491,11 @@ version explicitly lists.
 ```python
 class JobQueue(Protocol):
     async def enqueue(self, job_id: UUID, *, priority: Priority, defer_seconds: int = 0) -> None
-class EventPublisher(Protocol):
-    async def publish(self, event: DomainEvent) -> None
 ```
+
+`JobQueue` is implemented in phase 2 (arq adapter). An `EventPublisher` port is
+introduced only when a consumer exists (phase 11 webhooks); until then the audit
+log and database state are the event record.
 
 ---
 
@@ -481,7 +505,10 @@ Inputs (`DocumentSignals`): mime, page count, text-layer kind per page, text
 quality, table density, language, document type + classification confidence,
 `ProcessingPolicy`, schema field types, candidate providers' `assess()` results.
 
-Policy: an ordered list of declarative rules (versioned config), e.g.
+Routing is **deterministic**: rules over measured signals. AI contributes
+signals (e.g. classification confidence) but never picks the route. Phase 8
+starts with the policy as typed Python; the declarative form below is the
+target once tenants need to edit it:
 
 ```yaml
 - when: { doc_type: invoice, text_quality: ">=0.9" }
@@ -512,8 +539,8 @@ Every decision produces a **route trace** stored in `processing_steps.route_trac
 ```
 
 Resilience for every external provider: timeout, bounded retries with
-exponential backoff + jitter, per-provider circuit breaker (state in Redis so all
-workers share it), fallback chain. A provider failure fails the *step attempt*,
+exponential backoff + jitter, per-provider circuit breaker (in-process first;
+shared state in Redis only if per-worker breakers prove insufficient), fallback chain. A provider failure fails the *step attempt*,
 never the pipeline: primary → secondary → human review.
 
 ---
@@ -532,13 +559,40 @@ never the pipeline: primary → secondary → human review.
 ]}
 ```
 
-* The engine executes one step per queue message: load run → check step not
-  already completed (idempotency) → run step → persist results + transition in
-  one transaction → enqueue the next step. A crash re-runs at most one step.
-* Retries: `attempts < max_attempts` ⇒ `RETRYING` with `next_attempt_at =
-  base * 2^attempt + jitter`; exhausted ⇒ `FAILED` + dead-letter record
-  (`processing_jobs.status = dead_lettered`) visible in the UI for manual replay.
-* Priority: separate queues (`high`, `default`, `bulk`); workers subscribe in order.
+### Durability and idempotency (implemented in phase 2)
+
+Postgres is the source of truth for every job; Redis messages carry only a job
+id and may be lost, duplicated or delivered late. Correctness never depends on
+the queue:
+
+1. **Write, commit, then enqueue.** The use case that creates a job commits the
+   document + job + audit rows first, and only then enqueues. If the enqueue
+   fails, the job is still `QUEUED` in Postgres.
+2. **Sweeper.** A cluster-wide periodic task re-enqueues jobs that are
+   `QUEUED` and older than a grace period, `RETRY_SCHEDULED` and due, or
+   `RUNNING` with an expired lease (worker crashed / was killed).
+3. **Claim with a lease.** A worker starts a job only through an atomic
+   `UPDATE … WHERE status IN (QUEUED, RETRY_SCHEDULED) AND due
+   OR (status = RUNNING AND lease expired) RETURNING …`. Duplicate or stale
+   messages claim nothing and exit — that is what makes delivery idempotent.
+4. **Step checkpoints.** A job runs its workflow's steps in order and commits
+   after each one. On resume, steps with a `SUCCEEDED` record for this job are
+   skipped. Step handlers must be safe to re-run (upserts keyed by document/page),
+   because a crash between a step's side effects and its commit re-runs it once.
+5. **Retries.** Retryable categories (`SYSTEM_ERROR`, `PROVIDER_ERROR`) with
+   `attempts < max_attempts` ⇒ `RETRY_SCHEDULED`, `next_attempt_at = base ·
+   2^(attempt-1)` (capped, with jitter), re-enqueued with that delay.
+   Exhausted ⇒ `DEAD_LETTERED`. Non-retryable categories ⇒ `FAILED` immediately.
+   Both set the document to `FAILED`; **replay** (`POST /documents/{id}/process`)
+   creates a new job, leaving the failed one as history.
+6. **Transactions are owned by the use case.** Public application-service methods
+   (and the job runner per step) commit; helpers and step handlers never do.
+7. arq's own retry mechanism is disabled (`max_tries=1`); retry policy lives in
+   the database where it is visible and auditable.
+
+* Phase 2 workflows are defined in code (`application/workflows.py`) and
+  versioned there; phase 8 moves them to `WorkflowVersion` rows.
+* Priority queues (`high`, `default`, `bulk`) arrive with phase 8.
 
 ---
 
@@ -548,7 +602,7 @@ Envelope (no binaries, no document text):
 
 ```json
 { "event_id": "uuid", "type": "ExtractionCompleted", "occurred_at": "…",
-  "tenant_id": "…", "document_id": "…", "job_id": "…", "workflow_run_id": "…",
+  "tenant_id": "…", "document_id": "…", "job_id": "…",
   "correlation_id": "…", "payload": { "fields": 12, "low_confidence": 2 } }
 ```
 
@@ -558,10 +612,11 @@ ValidationPassed, ValidationFailed, HumanReviewRequested, HumanReviewCompleted,
 EnrichmentCompleted, ActionExecuted, ActionFailed, DocumentCompleted,
 DocumentFailed, DocumentRejected`.
 
-Phase 2 ships an in-process publisher that writes to the audit log and a Redis
-Stream (`idp.events`); external webhooks subscribe to that stream in phase 11.
-A transactional outbox table is introduced if/when delivery guarantees to
-external consumers are required.
+**Deferred.** No component consumes events before phase 11 (outbound
+webhooks). Until then, `audit_logs` plus database state are the event record.
+When a consumer arrives, events are written to a transactional outbox table in
+the same transaction as the state change and relayed from there — not published
+to a broker directly from request/worker code.
 
 ---
 
@@ -675,7 +730,7 @@ stack traces.
 * Every request gets/propagates `X-Correlation-ID`; it is bound into the log
   context, stored on jobs/runs/audit rows and carried in queue messages and events.
 * Logs: JSON (prod) / console (dev), fields `correlation_id, tenant_id,
-  document_id, job_id, workflow_run_id, step, provider, model, duration_ms`.
+  document_id, job_id, step, provider, model, duration_ms`.
 * Metrics (phase 12, Prometheus): step durations by step/provider, LLM latency,
   tokens, estimated cost, retries, failures by category, queue depth.
   Until then the same numbers are persisted on `processing_steps.metrics` and
@@ -689,7 +744,7 @@ stack traces.
 
 * `SchemaVersion`, `WorkflowVersion`, `ProviderConfigVersion`, routing policy
   versions, and model registry entries are immutable once referenced by a run.
-* Each `WorkflowRun` stores the exact versions + `pipeline_version` (app build).
+* Each `ProcessingJob` (the run) stores the exact versions + `pipeline_version` (app build).
 * Reprocessing creates a **new** run; older results remain queryable.
 
 ---
@@ -710,8 +765,9 @@ latency/doc. Human review corrections feed new ground truth.
 |-------|-------|---------------|
 | **0** Architecture | This document, CLAUDE.md, README, lifecycle state machine | ✅ reviewed |
 | **1** Foundation | Backend skeleton (layers, config, logging, error taxonomy, correlation IDs), Postgres + Alembic (tenants, users, projects, audit_logs), Redis, object-storage port with S3/MinIO + local adapters, arq worker with heartbeat, health/readiness, auth (login, JWT, RBAC, login rate limit), bootstrap CLI, frontend shell (login, dashboard with live system status, users, settings), Docker Compose, CI | ✅ tests, lint, types green; `docker compose up` works end-to-end |
-| **2** Ingestion | Upload API + UI, MIME sniffing, size limits, scanner port, checksum dedupe, documents table, processing_jobs + queue, events, document list/detail, signed downloads, API keys | upload → job queued → visible in UI |
-| **3** Digitization | Probe (native/scanned/hybrid/image/office), native PDF text + geometry (pypdfium2), page rendering, OCR port, Tesseract adapter + MockOCR, document_pages, layout JSON | native PDFs never OCR'd; geometry stored |
+| **1.5** Review fixes | Worker presence independent of job slots; trusted-proxy range + unpublished API port; coarse document status; streaming storage port; job-durability design; config-derived provider locality; stable row ids; per-service env + bucket-scoped S3 credentials; migrations/CLI without app secrets | ✅ |
+| **2** Ingestion + execution skeleton | Streamed, size-limited upload; magic-byte MIME allow-list; malware-scanner port (explicit no-op adapter, recorded as `not_scanned`); checksum dedupe; documents + pages; processing jobs/steps with lease claim, step checkpoints, retries, dead-letter, sweeper, replay; audited status changes; first real step: native PDF/image **probe**; document list/detail/timeline UI; signed downloads | upload → probe → COMPLETED; crash/retry/dead-letter/replay covered by tests |
+| **3** Digitization | Classification of probe results (native/scanned/hybrid/image/office), native PDF text + geometry (pypdfium2), page rendering, OCR port, Tesseract adapter + MockOCR, document_pages, layout JSON | native PDFs never OCR'd; geometry stored |
 | **4** Taxonomy + classification | Document types, versioned schemas, field definitions, rule classifier, page-level classification, splitter, document_parts | 10-page mixed PDF → 3 parts |
 | **5** Extraction | Provider registry, regex/rules/key-value extractors, normalisers, confidence, provenance | fields with bbox provenance |
 | **6** Validation | Rule engine + built-ins, per-field thresholds, outcomes | invoice math/IBAN/date rules |
@@ -719,5 +775,5 @@ latency/doc. Human review corrections feed new ground truth.
 | **8** Routing | Router, signals, route trace, fallback, circuit breaker, cost tracking, workflow versions, evaluation datasets | route trace visible in timeline |
 | **9** LLM | Gateway, OpenAI-compatible/Anthropic/Ollama adapters, structured output, policy enforcement, token/cost accounting | LOCAL_ONLY provably blocks cloud |
 | **10** Enrichment | REST/DB connectors, mock SAP/ERP, vendor lookup tool | enrichment results stored |
-| **11** Actions | Webhook, email, mock ERP action, tool registry, authorisation, idempotent action runs | actions only when workflow allows |
-| **12** Hardening | Tenant RLS, API rate limits, OpenTelemetry, Prometheus, backups, security review | prod checklist |
+| **11** Actions | Webhook, email, mock ERP action, authorisation, idempotent action runs, event outbox (first consumer), API keys for machine ingestion | actions only when workflow allows |
+| **12** Hardening | Tenant RLS, separate migration/runtime DB roles, API rate limits, OpenTelemetry, Prometheus, backups, sandboxed parsers, non-root nginx, image digests + resource limits, production manifests, ClamAV adapter, security review | prod checklist |

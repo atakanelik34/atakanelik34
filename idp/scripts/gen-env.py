@@ -6,7 +6,13 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-GENERATED = ("JWT_SECRET", "POSTGRES_PASSWORD", "MINIO_ROOT_PASSWORD", "IDP_BOOTSTRAP_PASSWORD")
+GENERATED = (
+    "JWT_SECRET",
+    "POSTGRES_PASSWORD",
+    "MINIO_ROOT_PASSWORD",
+    "S3_APP_SECRET_KEY",
+    "IDP_BOOTSTRAP_PASSWORD",
+)
 
 
 def main() -> int:

@@ -1,21 +1,42 @@
-# Development stack:  cp .env.example .env  (or `make env`)  &&  docker compose up --build
-# UI: http://localhost:8080   API docs: http://localhost:8000/api/v1/docs   MinIO console: http://localhost:9001
+# Development stack:  make env  &&  docker compose up --build
+# UI + API (via the frontend proxy): http://localhost:8080   API docs: http://localhost:8080/api/v1/docs
+# MinIO console: http://localhost:9001
+#
+# Development-oriented: infrastructure ports are bound to 127.0.0.1 only, and
+# MinIO is a dev default. See README "Production deployment" for what changes.
 name: idp
+
+# Each service receives only the variables it needs: no shared env_file, so the
+# API never sees database superuser, MinIO root or bootstrap credentials.
+x-app-env: &app-env
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_FORMAT: ${LOG_FORMAT:-json}
+  API_DOCS_ENABLED: ${API_DOCS_ENABLED:-true}
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-idp}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-idp}
+  REDIS_URL: redis://redis:6379/0
+  STORAGE_BACKEND: s3
+  STORAGE_BUCKET: ${STORAGE_BUCKET:-idp-documents}
+  S3_ENDPOINT_URL: http://minio:9000
+  S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-http://localhost:9000}
+  # Bucket-scoped credentials created by minio-init (not the MinIO root user).
+  S3_ACCESS_KEY_ID: ${S3_APP_ACCESS_KEY:?set S3_APP_ACCESS_KEY in .env}
+  S3_SECRET_ACCESS_KEY: ${S3_APP_SECRET_KEY:?set S3_APP_SECRET_KEY in .env}
+  JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+  ACCESS_TOKEN_TTL_MINUTES: ${ACCESS_TOKEN_TTL_MINUTES:-30}
+  LOGIN_RATE_LIMIT_ATTEMPTS: ${LOGIN_RATE_LIMIT_ATTEMPTS:-10}
+  LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${LOGIN_RATE_LIMIT_WINDOW_SECONDS:-300}
+  MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-52428800}
+  WORKER_MAX_JOBS: ${WORKER_MAX_JOBS:-4}
+  WORKER_HEARTBEAT_SECONDS: ${WORKER_HEARTBEAT_SECONDS:-15}
+
+x-db-env: &db-env
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-idp}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-idp}
 
 x-backend: &backend
   build: ./backend
   image: idp-backend:dev
-  env_file: .env
-  environment: &backend-env
-    DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-idp}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-idp}
-    REDIS_URL: redis://redis:6379/0
-    STORAGE_BACKEND: s3
-    S3_ENDPOINT_URL: http://minio:9000
-    S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-http://localhost:9000}
-    S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
-    S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
-    STORAGE_AUTO_CREATE_BUCKET: "true"
-    JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+  networks: [idp]
   restart: unless-stopped
 
 services:
@@ -29,6 +50,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
     ports:
       - "127.0.0.1:5432:5432"
+    networks: [idp]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -38,12 +60,14 @@ services:
 
   redis:
     image: redis:7-alpine
-    # AOF keeps queued job ids across restarts; Postgres remains the source of truth.
+    # AOF keeps queued job ids across restarts; Postgres remains the source of
+    # truth and the worker sweeper re-enqueues anything Redis loses.
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis-data:/data
     ports:
       - "127.0.0.1:6379:6379"
+    networks: [idp]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -52,8 +76,9 @@ services:
     restart: unless-stopped
 
   minio:
-    # The upstream minio/minio image is no longer published on Docker Hub; this is
-    # MinIO packaged by Bitnami (legacy, pinned). Override with MINIO_IMAGE.
+    # DEVELOPMENT DEFAULT. The upstream minio/minio image is no longer published
+    # on Docker Hub; this is MinIO packaged by Bitnami (legacy, unmaintained,
+    # pinned). Production must use real S3 or a maintained S3-compatible store.
     image: ${MINIO_IMAGE:-bitnamilegacy/minio:2025.7.23}
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
@@ -63,6 +88,7 @@ services:
     ports:
       - "127.0.0.1:9000:9000"
       - "127.0.0.1:9001:9001"
+    networks: [idp]
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
       interval: 5s
@@ -70,9 +96,40 @@ services:
       retries: 20
     restart: unless-stopped
 
+  minio-init:
+    # Creates the bucket and a least-privilege app user limited to that bucket.
+    image: ${MINIO_IMAGE:-bitnamilegacy/minio:2025.7.23}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null
+        mc mb --ignore-existing "local/$$BUCKET"
+        cat > /tmp/policy.json <<EOF
+        {"Version":"2012-10-17","Statement":[
+          {"Effect":"Allow","Action":["s3:GetBucketLocation","s3:ListBucket"],"Resource":["arn:aws:s3:::$$BUCKET"]},
+          {"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject"],"Resource":["arn:aws:s3:::$$BUCKET/*"]}]}
+        EOF
+        mc admin policy create local idp-app /tmp/policy.json
+        mc admin user add local "$$APP_KEY" "$$APP_SECRET"
+        mc admin policy attach local idp-app --user "$$APP_KEY" 2>/dev/null || true
+        echo "bucket $$BUCKET and scoped app user ready"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      BUCKET: ${STORAGE_BUCKET:-idp-documents}
+      APP_KEY: ${S3_APP_ACCESS_KEY:?set S3_APP_ACCESS_KEY in .env}
+      APP_SECRET: ${S3_APP_SECRET_KEY:?set S3_APP_SECRET_KEY in .env}
+    networks: [idp]
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+
   migrate:
     <<: *backend
     command: ["alembic", "upgrade", "head"]
+    environment: *db-env
     restart: "no"
     depends_on:
       postgres:
@@ -87,10 +144,15 @@ services:
       - >
         if [ -z "$$IDP_BOOTSTRAP_PASSWORD" ]; then echo "IDP_BOOTSTRAP_PASSWORD not set; skipping bootstrap"; exit 0; fi;
         exec idp bootstrap --if-missing
-        --tenant-slug "$${IDP_BOOTSTRAP_TENANT_SLUG:-demo}"
-        --tenant-name "$${IDP_BOOTSTRAP_TENANT_NAME:-Demo Tenant}"
-        --email "$${IDP_BOOTSTRAP_EMAIL:-admin@demo.local}"
-        --name "$${IDP_BOOTSTRAP_NAME:-Platform Admin}"
+        --tenant-slug "$$IDP_BOOTSTRAP_TENANT_SLUG" --tenant-name "$$IDP_BOOTSTRAP_TENANT_NAME"
+        --email "$$IDP_BOOTSTRAP_EMAIL" --name "$$IDP_BOOTSTRAP_NAME"
+    environment:
+      <<: *db-env
+      IDP_BOOTSTRAP_TENANT_SLUG: ${IDP_BOOTSTRAP_TENANT_SLUG:-demo}
+      IDP_BOOTSTRAP_TENANT_NAME: ${IDP_BOOTSTRAP_TENANT_NAME:-Demo Tenant}
+      IDP_BOOTSTRAP_EMAIL: ${IDP_BOOTSTRAP_EMAIL:-admin@demo.local}
+      IDP_BOOTSTRAP_NAME: ${IDP_BOOTSTRAP_NAME:-Platform Admin}
+      IDP_BOOTSTRAP_PASSWORD: ${IDP_BOOTSTRAP_PASSWORD:-}
     restart: "no"
     depends_on:
       migrate:
@@ -99,30 +161,31 @@ services:
   api:
     <<: *backend
     environment:
-      <<: *backend-env
-      # Trust X-Forwarded-For only from the frontend proxy on the compose network.
-      FORWARDED_ALLOW_IPS: "*"
-    ports:
-      - "127.0.0.1:8000:8000"
+      <<: *app-env
+      # Honour X-Forwarded-For only from the compose network (the frontend proxy).
+      # The API port is not published, so nothing outside can spoof client IPs.
+      FORWARDED_ALLOW_IPS: ${IDP_NETWORK_SUBNET:-172.29.0.0/16}
+    expose: ["8000"]
     depends_on:
       migrate:
         condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
       redis:
-        condition: service_healthy
-      minio:
         condition: service_healthy
 
   worker:
     <<: *backend
     command: ["arq", "idp.workers.main.WorkerSettings"]
+    environment: *app-env
     healthcheck:
       disable: true
     depends_on:
       migrate:
         condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
       redis:
-        condition: service_healthy
-      minio:
         condition: service_healthy
 
   frontend:
@@ -130,6 +193,7 @@ services:
     image: idp-frontend:dev
     ports:
       - "127.0.0.1:8080:8080"
+    networks: [idp]
     depends_on:
       api:
         condition: service_healthy
@@ -137,13 +201,20 @@ services:
 
   # Optional local LLM runtime (used from phase 9):  docker compose --profile llm up
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:${OLLAMA_VERSION:-0.12.3}
     profiles: ["llm"]
     volumes:
       - ollama-data:/root/.ollama
     ports:
       - "127.0.0.1:11434:11434"
+    networks: [idp]
     restart: unless-stopped
+
+networks:
+  idp:
+    ipam:
+      config:
+        - subnet: ${IDP_NETWORK_SUBNET:-172.29.0.0/16}
 
 volumes:
   postgres-data:

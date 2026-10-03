@@ -117,3 +117,20 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
+
+
+class DatabaseSettings(BaseSettings):
+    """The subset needed by migrations and operational CLI commands.
+
+    Kept separate so running `alembic upgrade` or `idp bootstrap` does not
+    require (and therefore does not receive) the JWT secret or storage keys.
+    """
+
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    database_url: SecretStr
+    database_echo: bool = False
+
+
+def get_database_settings() -> DatabaseSettings:
+    return DatabaseSettings()

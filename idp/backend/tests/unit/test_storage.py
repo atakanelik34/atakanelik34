@@ -52,11 +52,20 @@ async def test_local_roundtrip(local: LocalFilesystemStorage) -> None:
     stored = await local.put(key, io.BytesIO(b"%PDF-1.7"), content_type="application/pdf", size=8)
     assert stored.size == 8
     assert await local.exists(key)
-    assert await local.get(key) == b"%PDF-1.7"
+    sink = io.BytesIO()
+    assert await local.download(key, sink) == 8
+    assert sink.getvalue() == b"%PDF-1.7"
     await local.delete(key)
     assert not await local.exists(key)
     with pytest.raises(NotFoundError):
-        await local.get(key)
+        await local.download(key, io.BytesIO())
+
+
+async def test_local_put_rejects_size_mismatch(local: LocalFilesystemStorage) -> None:
+    key = build_key(TENANT, "documents", "d9", "original")
+    with pytest.raises(ValidationError):
+        await local.put(key, io.BytesIO(b"longer than declared"), content_type="x/y", size=4)
+    assert not await local.exists(key)
 
 
 async def test_local_signed_url_verifies_and_expires(local: LocalFilesystemStorage) -> None:
@@ -91,14 +100,16 @@ async def test_s3_roundtrip_and_signed_url(s3: S3ObjectStorage) -> None:
     key = build_key(TENANT, "documents", "d2", "original")
     await s3.put(key, io.BytesIO(b"hello"), content_type="text/plain", size=5)
     assert await s3.exists(key)
-    assert await s3.get(key) == b"hello"
+    sink = io.BytesIO()
+    assert await s3.download(key, sink) == 5
+    assert sink.getvalue() == b"hello"
     url = await s3.signed_url(key, expires_in=60, filename='inv"oice.pdf')
     assert "X-Amz-Signature" in url
     assert "invoice.pdf" in url
     await s3.delete(key)
     assert not await s3.exists(key)
     with pytest.raises(NotFoundError):
-        await s3.get(key)
+        await s3.download(key, io.BytesIO())
 
 
 async def test_s3_health_reports_missing_bucket() -> None:

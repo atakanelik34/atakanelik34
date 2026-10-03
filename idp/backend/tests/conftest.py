@@ -65,7 +65,9 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 @pytest.fixture(scope="session")
 def migrated_database() -> str:
     assert TEST_DATABASE_URL is not None
-    env = {**os.environ, "DATABASE_URL": TEST_DATABASE_URL}
+    # No JWT_SECRET: migrations must only need the database URL.
+    env = {k: v for k, v in os.environ.items() if k != "JWT_SECRET"}
+    env["DATABASE_URL"] = TEST_DATABASE_URL
     for args in (["downgrade", "base"], ["upgrade", "head"]):
         subprocess.run(  # noqa: S603 — fixed argv, test-only
             [sys.executable, "-m", "alembic", *args],

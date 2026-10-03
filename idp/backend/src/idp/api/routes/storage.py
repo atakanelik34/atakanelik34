@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Query
+from fastapi.responses import FileResponse
 
 from idp.api.deps import ContainerDep
 from idp.domain.errors import AuthorizationError
@@ -24,15 +25,15 @@ async def download(
     container: ContainerDep,
     expires: Annotated[int, Query()],
     signature: Annotated[str, Query(min_length=64, max_length=64)],
-) -> Response:
+) -> FileResponse:
     storage = container.storage
     if not isinstance(storage, LocalFilesystemStorage) or not storage.verify(
         key, expires, signature
     ):
         raise AuthorizationError("Invalid or expired download link")
-    data = await storage.get(key)
-    return Response(
-        content=data,
+    # FileResponse streams from disk in chunks.
+    return FileResponse(
+        storage.path_for(key),
         media_type="application/octet-stream",
         headers={"Content-Disposition": "attachment"},
     )
