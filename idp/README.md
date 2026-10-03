@@ -24,7 +24,8 @@ per document by a routing engine that respects a local-first data policy.
 | 2 | Ingestion + execution skeleton: streamed upload, type detection, dedupe, jobs with lease/checkpoints/retries/dead-letter/sweeper/replay, native-vs-scanned page probe, documents UI with processing timeline | ✅ |
 | 3 | Digitization: native text + geometry, page rendering, OCR port (Tesseract bundled, labelled mock), document viewer | ✅ |
 | 4 | Taxonomy: versioned schemas, templates, rule classifier, page-level splitting, document-type editor | ✅ |
-| 5–12 | Extraction → … → production hardening | in progress ([roadmap](ARCHITECTURE.md#16-phased-implementation-plan)) |
+| 5 | Extraction: regex, key/value and table providers, normalisation, confidence, provenance, result contract, extraction panel with source highlighting | ✅ |
+| 6–12 | Validation → … → production hardening | in progress ([roadmap](ARCHITECTURE.md#16-phased-implementation-plan)) |
 
 The UI shows planned sections in the navigation as disabled with their phase
 number; nothing in the product is simulated.

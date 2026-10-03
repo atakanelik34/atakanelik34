@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { ErrorNotice, Skeleton } from '@/components/ui/feedback'
 import { Table, TD, TH, THead, TR } from '@/components/ui/table'
 import { hasPermission, useMe } from '@/features/auth/api'
@@ -20,7 +20,10 @@ import { PartsCard } from '@/features/documents/PartsCard'
 import { ProcessingTimeline } from '@/features/documents/ProcessingTimeline'
 import { DocumentStatusBadge } from '@/features/documents/StatusBadges'
 import { ACTIVE_STATUSES, REPROCESSABLE, type DocumentDetail, type Page } from '@/features/documents/types'
-import { DocumentViewer } from '@/features/viewer/DocumentViewer'
+import { useProcessingResult } from '@/features/extraction/api'
+import { FieldsPanel } from '@/features/extraction/FieldsPanel'
+import type { FieldValue } from '@/features/extraction/types'
+import { DocumentViewer, type Highlight } from '@/features/viewer/DocumentViewer'
 import { formatBytes, formatDateTime } from '@/lib/format'
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -129,6 +132,17 @@ export function DocumentDetailPage() {
   const active = document.data ? ACTIVE_STATUSES.includes(document.data.status) : false
   const timeline = useTimeline(id, active)
   const parts = useParts(id, active)
+  const result = useProcessingResult(id, active)
+  const [selectedField, setSelectedField] = useState<FieldValue | null>(null)
+  const highlight: Highlight | null =
+    selectedField?.provenance.bbox && selectedField.provenance.page
+      ? { page: selectedField.provenance.page, bbox: selectedField.provenance.bbox, label: selectedField.path }
+      : null
+
+  function selectField(field: FieldValue) {
+    setSelectedField(field)
+    if (field.provenance.page) setViewerPage(field.provenance.page)
+  }
   const reprocess = useReprocessDocument(id)
   const remove = useDeleteDocument(id)
   const [actionError, setActionError] = useState<unknown>(null)
@@ -221,6 +235,7 @@ export function DocumentDetailPage() {
                   pageCount={doc.page_count ?? 1}
                   page={viewerPage}
                   onPageChange={setViewerPage}
+                  highlights={highlight ? [highlight] : []}
                 />
               </Card>
             ) : (
@@ -233,6 +248,21 @@ export function DocumentDetailPage() {
           </div>
           <div className="space-y-6 lg:col-span-2">
             <PartsCard parts={parts.data ?? []} onSelect={setViewerPage} />
+            {result.data?.parts
+              .filter((p) => p.extraction)
+              .map((part) => (
+                <Card key={part.part_id} className="overflow-hidden">
+                  <CardHeader>
+                    <div>
+                      <CardTitle>{part.classification.document_type_name ?? 'Extracted data'}</CardTitle>
+                      <CardDescription>
+                        pages {part.pages[0]}–{part.pages[1]} · click a value to see its source
+                      </CardDescription>
+                    </div>
+                  </CardHeader>
+                  <FieldsPanel part={part} selectedId={selectedField?.id ?? null} onSelect={selectField} />
+                </Card>
+              ))}
             <DetailsCard doc={doc} />
             <PagesCard doc={doc} />
           </div>

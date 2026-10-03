@@ -56,12 +56,14 @@ ignore = [
     "PLR0913",  # explicit keyword-heavy constructors are intentional (DI)
     "PLR2004",  # magic values are fine in tests/HTTP status checks
     "RUF012",
+    "RUF001",   # multilingual document text legitimately uses ı, –, − etc.
+    "RUF003",
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106", "PLR0913", "PT018", "E501", "PLC0415"]
 "migrations/**" = ["E501"]
-"src/idp/domain/templates.py" = ["E501", "RUF001"]  # multilingual keywords
+"src/idp/domain/templates.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.11"

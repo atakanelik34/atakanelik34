@@ -161,3 +161,61 @@ MIXED_PACKET_PAGES: list[str | None] = [
 def mixed_packet() -> bytes:
     """10 pages: invoice (1-3), delivery note (4-5), contract (6-10)."""
     return make_pdf(MIXED_PACKET_PAGES)
+
+
+def make_text_pdf(rows: list[list[tuple[float, str]]], *, font_size: int = 10) -> bytes:
+    """One page; each row is a list of (x position in pt, text) placed on one line."""
+    lines = []
+    for n, row in enumerate(rows):
+        y = 750 - n * int(font_size * 1.6)
+        for x, text in row:
+            lines.append(f"BT /F1 {font_size} Tf {x} {y} Td ({_escape(text)}) Tj ET")
+    stream = "\n".join(lines).encode()
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream",
+    ]
+    out = io.BytesIO()
+    out.write(b"%PDF-1.7\n")
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(out.tell())
+        out.write(f"{number} 0 obj\n".encode() + body + b"\nendobj\n")
+    xref = out.tell()
+    out.write(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode())
+    for offset in offsets:
+        out.write(f"{offset:010d} 00000 n \n".encode())
+    out.write(
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    )
+    return out.getvalue()
+
+
+INVOICE_ROWS: list[list[tuple[float, str]]] = [
+    [(72, "ACME Industrial Supplies GmbH")],
+    [(72, "Hauptstrasse 1, 10115 Berlin")],
+    [(72, "VAT ID: DE123456789")],
+    [],
+    [(72, "INVOICE")],
+    [(72, "Invoice number: INV-2026-00123"), (360, "Invoice date: 03.10.2026")],
+    [(72, "PO number: PO-5531"), (360, "Due date: 02.11.2026")],
+    [],
+    [(72, "Description"), (300, "Qty"), (370, "Unit price"), (480, "Amount")],
+    [(72, "Hydraulic pump HP-200"), (300, "2"), (370, "450.00"), (480, "900.00")],
+    [(72, "Seal kit SK-7"), (300, "10"), (370, "12.50"), (480, "125.00")],
+    [(72, "Installation service"), (300, "1"), (370, "25.00"), (480, "25.00")],
+    [],
+    [(370, "Subtotal"), (480, "1,050.00")],
+    [(370, "VAT 19%"), (480, "199.50")],
+    [(370, "Total due"), (480, "1,249.50 EUR")],
+    [],
+    [(72, "IBAN: DE89 3704 0044 0532 0130 00")],
+    [(72, "Currency: EUR")],
+]
+
+
+def invoice_pdf(rows: list[list[tuple[float, str]]] | None = None) -> bytes:
+    return make_text_pdf(rows or INVOICE_ROWS)

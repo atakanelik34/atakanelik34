@@ -23,6 +23,7 @@ from arq.connections import RedisSettings
 from idp.application.jobs import JobRunner, JobScheduler, JobSweeper
 from idp.application.steps.classify import ClassifyStep
 from idp.application.steps.digitize import DigitizeStep
+from idp.application.steps.extract import ExtractStep
 from idp.application.steps.probe import ProbeStep
 from idp.application.workflows import StepHandler
 from idp.config import Settings, get_settings
@@ -33,6 +34,9 @@ from idp.infrastructure.queue.presence import PresencePublisher
 from idp.infrastructure.queue.redis import WorkerHeartbeat, arq_redis_settings, create_redis
 from idp.infrastructure.storage.factory import create_storage
 from idp.providers.digitization.local import HybridDigitizer
+from idp.providers.extraction.key_value import KeyValueExtractor
+from idp.providers.extraction.regex_extractor import RegexExtractor
+from idp.providers.extraction.table import TableExtractor
 from idp.providers.ocr.factory import create_ocr_engine
 from idp.providers.ocr.tesseract import TesseractOCREngine
 from idp.providers.probing.local import LocalDocumentProber
@@ -68,6 +72,10 @@ async def build_handlers(settings: Settings, ctx: dict[str, Any]) -> dict[str, S
         ProbeStep(storage=ctx["storage"], prober=prober, tmp_dir=settings.worker_tmp_dir),
         DigitizeStep(storage=ctx["storage"], digitizer=digitizer, tmp_dir=settings.worker_tmp_dir),
         ClassifyStep(storage=ctx["storage"]),
+        ExtractStep(
+            storage=ctx["storage"],
+            providers=[RegexExtractor(), KeyValueExtractor(), TableExtractor()],
+        ),
     ]
     return {step.key: step for step in steps}
 

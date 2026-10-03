@@ -780,7 +780,7 @@ latency/doc. Human review corrections feed new ground truth.
 | **2** Ingestion + execution skeleton | Streamed, size-limited upload; magic-byte MIME allow-list; malware-scanner port (explicit no-op adapter, recorded as `not_scanned`); checksum dedupe; documents + pages; processing jobs/steps with lease claim, step checkpoints, retries, dead-letter, sweeper, replay; audited status changes; first real step: native PDF/image **probe**; document list/detail/timeline UI; signed downloads | upload → probe → COMPLETED; crash/retry/dead-letter/replay covered by tests |
 | **3** Digitization ✅ | Classification of probe results (native/scanned/hybrid/image), native PDF text + geometry (pypdfium2), page rendering, OCR port, Tesseract adapter + MockOCR, document_pages, layout JSON | native PDFs never OCR'd; geometry stored |
 | **4** Taxonomy + classification ✅ | Document types, versioned schemas, field definitions, rule classifier, page-level classification, splitter, document_parts | 10-page mixed PDF → 3 parts |
-| **5** Extraction | Provider registry, regex/rules/key-value extractors, normalisers, confidence, provenance | fields with bbox provenance |
+| **5** Extraction ✅ | Provider registry, regex/rules/key-value extractors, normalisers, confidence, provenance | fields with bbox provenance |
 | **6** Validation | Rule engine + built-ins, per-field thresholds, outcomes | invoice math/IBAN/date rules |
 | **7** Human review | Review queue, workspace (viewer + fields + validation), bbox highlight, edit/accept/reject/approve/send-back, audit read API | full HITL loop |
 | **8** Routing | Router, signals, route trace, fallback, circuit breaker, cost tracking, workflow versions, evaluation datasets | route trace visible in timeline |
@@ -837,3 +837,26 @@ revisited deliberately. Deferred items name the phase that owns them.
 * **UI:** "Schemas" is not a separate nav section — schemas are versions of a
   document type. The editor is a validated JSON editor with a structured field
   preview; a form-based field builder is a later UX enhancement (not scheduled).
+
+### Phase 5 — Extraction
+* **Deterministic providers first:** regex (schema patterns, timeout-guarded),
+  key/value (alias → value right of / below the label; aliases contained in a
+  longer alias of another field are suppressed, e.g. "date" inside "due date"),
+  table (header from ≥ 2 child aliases, columns by x-overlap, stop at totals).
+  A weak "first line" heuristic exists only for string fields hinted `below`
+  (issuer names) and is deliberately scored low (0.45) so it is reviewed.
+* **Confidence model:** method base (regex 0.92, right-of-label 0.85, below 0.75,
+  table 0.82) × 0.5 if normalisation failed × mean OCR word confidence. To be
+  calibrated by the evaluation framework (phase 8); per-field thresholds decide.
+* **Normalisation** is per type and JSON-safe: decimals as strings, ISO dates,
+  ISO 4217 currencies. Auto separator rule: the last of `,`/`.` is the decimal
+  mark; a single separator before exactly three digits (no leading zero) is a
+  thousands separator ("1.000" = 1000). Ambiguous numeric dates follow the
+  field's `date_order` (default DMY) unless one side exceeds 12. Numbers
+  followed by `%` are never taken as amounts.
+* **Merging:** best candidate per scalar path, up to three distinct alternatives
+  kept; rows come from the provider with the highest mean row confidence.
+  Absent fields are stored as `missing` (value null) so review can fill them.
+* **Stable row ids** (`r_<12 hex>`) are assigned at extraction time.
+* **Results are per (job, part)** and immutable per job; corrections (phase 7)
+  update `value`/`status` and keep `original_value` plus an audited action.

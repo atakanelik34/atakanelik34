@@ -12,6 +12,7 @@ from idp.application.auth import principal_from_user
 from idp.application.jobs import JobRunner, JobScheduler, JobSweeper
 from idp.application.steps.classify import ClassifyStep
 from idp.application.steps.digitize import DigitizeStep
+from idp.application.steps.extract import ExtractStep
 from idp.application.steps.probe import ProbeStep
 from idp.application.users import NewUser, TenantBootstrapService, UserService
 from idp.application.workflows import StepHandler
@@ -21,6 +22,9 @@ from idp.domain.identity import Role
 from idp.infrastructure.db.repositories import UserRepository
 from idp.main import create_app
 from idp.providers.digitization.local import HybridDigitizer
+from idp.providers.extraction.key_value import KeyValueExtractor
+from idp.providers.extraction.regex_extractor import RegexExtractor
+from idp.providers.extraction.table import TableExtractor
 from idp.providers.probing.local import LocalDocumentProber
 
 OWNER_PASSWORD = "Owner-Password-123!"
@@ -150,7 +154,15 @@ def digitize_step(container: Container, digitizer: HybridDigitizer) -> DigitizeS
 def default_handlers(
     container: Container, probe_step: ProbeStep, digitize_step: DigitizeStep
 ) -> dict[str, StepHandler]:
-    steps: list[StepHandler] = [probe_step, digitize_step, ClassifyStep(storage=container.storage)]
+    steps: list[StepHandler] = [
+        probe_step,
+        digitize_step,
+        ClassifyStep(storage=container.storage),
+        ExtractStep(
+            storage=container.storage,
+            providers=[RegexExtractor(), KeyValueExtractor(), TableExtractor()],
+        ),
+    ]
     return {step.key: step for step in steps}
 
 

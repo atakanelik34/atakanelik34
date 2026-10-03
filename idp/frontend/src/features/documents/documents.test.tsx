@@ -17,6 +17,8 @@ function me(permissions: Permission[]): Me {
   }
 }
 
+const EMPTY_RESULT = { document_id: 'd1', status: 'FAILED', job_id: null, parts: [], pages: [], metrics: { steps: {}, duration_ms: 0, estimated_cost: 0 }, errors: [] }
+
 const PAGE: Page = {
   page_number: 1,
   width: 612,
@@ -144,6 +146,7 @@ describe('documents', () => {
       'GET /api/v1/auth/me': () => json(me(['documents:read', 'documents:write'])),
       'GET /api/v1/documents/d1': () => json(DOC),
       'GET /api/v1/documents/d1/timeline': () => json(TIMELINE),
+      'GET /api/v1/documents/d1/extraction': () => json(EMPTY_RESULT),
       'GET /api/v1/documents/d1/parts': () =>
         json([
           {
@@ -175,6 +178,7 @@ describe('documents', () => {
       'GET /api/v1/auth/me': () => json(me(['documents:read'])),
       'GET /api/v1/documents/d1': () => json({ ...DOC, status: 'COMPLETED' }),
       'GET /api/v1/documents/d1/timeline': () => json(TIMELINE),
+      'GET /api/v1/documents/d1/extraction': () => json(EMPTY_RESULT),
       'GET /api/v1/documents/d1/parts': () => json([]),
     })
     renderRoutes([{ path: '/documents/:id', element: <DocumentDetailPage /> }], '/documents/d1')

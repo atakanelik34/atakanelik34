@@ -7,6 +7,7 @@ from idp.infrastructure.db.models.documents import (
     ProcessingJob,
     ProcessingStep,
 )
+from idp.infrastructure.db.models.extraction import ExtractedField, ExtractionResult
 from idp.infrastructure.db.models.identity import Project, Tenant, User
 from idp.infrastructure.db.models.taxonomy import (
     DocumentPart,
@@ -21,6 +22,8 @@ __all__ = [
     "DocumentPage",
     "DocumentPart",
     "DocumentType",
+    "ExtractedField",
+    "ExtractionResult",
     "ProcessingJob",
     "ProcessingStep",
     "Project",

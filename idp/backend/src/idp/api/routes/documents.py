@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
+from fastapi.encoders import jsonable_encoder
 from starlette.datastructures import UploadFile
 
 from idp.api.deps import ContainerDep, SessionDep, require
@@ -27,6 +28,7 @@ from idp.api.schemas.documents import (
 from idp.api.schemas.taxonomy import DocumentPartOut
 from idp.application.documents import DocumentService
 from idp.application.ingestion import IncomingFile, IngestionService
+from idp.application.results import ResultService
 from idp.domain.documents import DocumentSource
 from idp.domain.errors import LengthRequiredError, PayloadTooLargeError, ValidationError
 from idp.domain.identity import Permission, Principal
@@ -214,6 +216,18 @@ async def page_layout(
             for line in layout.lines
         ],
     )
+
+
+@router.get("/{document_id}/extraction")
+async def get_extraction(
+    document_id: uuid.UUID, principal: Reader, session: SessionDep
+) -> dict[str, Any]:
+    """The processing result: parts, classification, fields with confidence and
+    provenance, line-item tables, validation, enrichment, actions, metrics, errors."""
+    result: dict[str, Any] = jsonable_encoder(
+        await ResultService(session).processing_result(principal, document_id)
+    )
+    return result
 
 
 @router.get("/{document_id}/parts", response_model=list[DocumentPartOut])
