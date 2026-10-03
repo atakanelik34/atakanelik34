@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from idp.domain.geometry import BBox, Line, PageLayout
+from idp.domain.routing import Locality, Tier
 from idp.domain.taxonomy import SchemaDefinition
 
 SCALAR_ROW = ""  # row_id for non-repeating fields
@@ -21,8 +22,11 @@ class ProviderInfo:
     name: str
     version: str
     method: str  # regex | key_value | table | heuristic | llm
-    locality: str = "local"
+    locality: Locality = Locality.LOCAL
     is_mock: bool = False
+    tier: Tier = Tier.DETERMINISTIC  # routing preference (domain/routing.py)
+    cost_per_page: float = 0.0  # estimated, in the deployment's billing currency
+    needs_tables: bool = False  # only useful for schemas with repeating groups
 
 
 @dataclass(frozen=True, slots=True)

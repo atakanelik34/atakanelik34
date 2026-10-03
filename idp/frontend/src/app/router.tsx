@@ -6,6 +6,11 @@ import { RequireAuth } from '@/features/auth/RequireAuth'
 import { DashboardPage } from '@/features/dashboard/DashboardPage'
 import { DocumentDetailPage } from '@/features/documents/DocumentDetailPage'
 import { DocumentsPage } from '@/features/documents/DocumentsPage'
+import { DatasetPage } from '@/features/evaluation/DatasetPage'
+import { EvaluationPage } from '@/features/evaluation/EvaluationPage'
+import { ProcessingPage } from '@/features/processing/ProcessingPage'
+import { ProvidersPage } from '@/features/processing/ProvidersPage'
+import { WorkflowsPage } from '@/features/processing/WorkflowsPage'
 import { SettingsPage } from '@/features/settings/SettingsPage'
 import { UsersPage } from '@/features/users/UsersPage'
 import { AuditLogPage } from '@/features/audit/AuditLogPage'
@@ -32,6 +37,11 @@ export const routes = [
       { path: 'reviews', element: <ReviewQueuePage /> },
       { path: 'reviews/:id', element: <ReviewWorkspacePage /> },
       { path: 'audit', element: <AuditLogPage /> },
+      { path: 'processing', element: <ProcessingPage /> },
+      { path: 'workflows', element: <WorkflowsPage /> },
+      { path: 'providers', element: <ProvidersPage /> },
+      { path: 'evaluation', element: <EvaluationPage /> },
+      { path: 'evaluation/:id', element: <DatasetPage /> },
       { path: 'users', element: <UsersPage /> },
       { path: 'settings', element: <SettingsPage /> },
     ],

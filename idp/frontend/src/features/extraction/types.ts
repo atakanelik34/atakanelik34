@@ -51,12 +51,35 @@ export interface PartResult {
     reasons: string[]
   }
   schema_version: number | null
-  extraction: { route: string; providers: string[]; route_trace: Record<string, unknown>; metrics: Record<string, unknown> } | null
+  extraction: { route: string; providers: string[]; route_trace: RouteTrace | Record<string, never>; metrics: Record<string, unknown> } | null
   fields: Record<string, FieldValue>
   tables: Record<string, { row_id: string; cells: Record<string, FieldValue> }[]>
   validation: ValidationOutcome[]
   enrichment: Record<string, unknown>[]
   actions: Record<string, unknown>[]
+}
+
+export interface ProviderAttempt {
+  provider: string
+  status: 'ok' | 'skipped' | 'failed' | 'timeout' | 'circuit_open'
+  version?: string
+  candidates?: number
+  duration_ms?: number
+  estimated_cost?: number
+  error?: string
+  reasons?: string[]
+}
+
+export interface RouteTrace {
+  route: string
+  routing_version: number
+  policy_version: number
+  signals: Record<string, string | number | boolean | null>
+  reasons: string[]
+  planned_stages: string[][]
+  rejected: { provider: string; reason: string }[]
+  stages: { stage: number; attempts: ProviderAttempt[]; unresolved: string[]; outcome: 'accepted' | 'escalated' | 'exhausted' }[]
+  estimated_cost: number
 }
 
 export interface ProcessingResult {

@@ -538,7 +538,7 @@ Default preference (configurable, not hard-coded): native text → rules/regex �
 layout → specialised model → local LLM → cloud LLM. Low confidence on required
 fields triggers the next candidate; exhausting candidates ⇒ human review.
 
-Every decision produces a **route trace** stored in `processing_steps.route_trace`:
+Every decision produces a **route trace** stored per part in `extraction_results.route_trace`:
 
 ```json
 { "route": "LAYOUT_EXTRACTION",
@@ -783,7 +783,7 @@ latency/doc. Human review corrections feed new ground truth.
 | **5** Extraction ✅ | Provider registry, regex/rules/key-value extractors, normalisers, confidence, provenance | fields with bbox provenance |
 | **6** Validation ✅ | Rule engine + built-ins, per-field thresholds, outcomes | invoice math/IBAN/date rules |
 | **7** Human review ✅ | Review queue, workspace (viewer + fields + validation), bbox highlight, edit/accept/reject/approve/send-back, audit read API | full HITL loop |
-| **8** Routing | Router, signals, route trace, fallback, circuit breaker, cost tracking, workflow versions, evaluation datasets | route trace visible in timeline |
+| **8** Routing ✅ | Router, signals, route trace, fallback, circuit breaker, cost tracking, workflow versions, evaluation datasets | route trace visible in timeline |
 | **9** LLM | Gateway, OpenAI-compatible/Anthropic/Ollama adapters, structured output, policy enforcement, token/cost accounting | LOCAL_ONLY provably blocks cloud |
 | **10** Enrichment | REST/DB connectors, mock SAP/ERP, vendor lookup tool | enrichment results stored |
 | **11** Actions | Webhook, email, mock ERP action, authorisation, idempotent action runs, event outbox (first consumer), API keys for machine ingestion | actions only when workflow allows |
@@ -899,4 +899,46 @@ revisited deliberately. Deferred items name the phase that owns them.
   assignee may act; admins (`users:write`) can take over a stuck task. An
   unassigned open task can be worked by any reviewer with `reviews:write`.
 * Audit log read API (`GET /audit-logs`, cursor paginated, `audit:read`) and UI.
+
+### Phase 8 — Routing and evaluation
+* **Router** (`domain/routing.py`, `RoutingPolicy` v1) plans per part from
+  `DocumentSignals` (text source/quality per page, OCR confidence, table
+  density, document type, classification confidence, repeating groups) and the
+  `PolicySnapshot`. Routes: NATIVE_TEXT, OCR_TEXT, MIXED_TEXT, NO_TEXT,
+  UNCLASSIFIED. Providers are grouped into stages by `Tier`
+  (deterministic → layout → model → local LLM → cloud LLM).
+* **Admission** is explicit and recorded: not configured, mock disabled, policy
+  locality (LOCAL_ONLY refuses cloud), LLM disallowed, circuit open, schema has
+  no tables, cost above the policy limit. Under HYBRID, cloud providers are never
+  merged into an earlier stage, even when weak signals pull the first local
+  fallback forward.
+* **Escalation**: the next stage runs only while required fields are missing or
+  below their threshold (required groups without rows count). Exhausted stages
+  end in review via validation — never in a guessed value.
+* **Failure isolation**: each provider runs with a timeout and an in-process
+  circuit breaker per worker; failures are recorded in the trace and fall
+  through. Only when every attempted provider failed is the step attempt failed
+  (retryable `ProviderError`), so outages retry instead of flooding review.
+* **Cost**: `cost_per_page` × pages per successful provider, stored on
+  `extraction_results.cost_estimate` and summed in step metrics.
+* **Policy source**: a deployment default (`PROCESSING_MODE`,
+  `ALLOW_MOCK_PROVIDERS`) behind the `PolicyResolver` port; per-tenant versioned
+  policies arrive with the LLM gateway (phase 9) without touching the router.
+* **Provider catalog** (`providers/catalog.py`) is the single list used by the
+  worker (instances) and the API (`GET /providers`); unconfigured providers are
+  shown as "Provider not configured". Breaker state is per worker process and
+  not exposed through the API (documented limitation).
+* **Evaluation**: datasets of ground-truth items imported from approved reviews
+  (rejected fields → no value, deleted rows dropped). A run scores the latest
+  *machine* output (`original_value`, excluding reviewer-added values) per
+  item: TP/FP/FN, precision/recall/F1, exact and normalised match, confidence
+  of right vs. wrong answers, overconfident errors (wrong at/above threshold),
+  intervention rate, cost and machine latency (excluding review wait). Rows
+  are aligned by content. To compare configurations, reprocess and run again;
+  each run records the pipeline/workflow/route/routing versions it measured.
+  Runs execute in the request, bounded to 1,000 items (worker execution
+  deferred until needed).
+* **Deferred**: database-stored, tenant-editable workflow definitions move to
+  phase 11, where workflows gain configurable actions; until then workflows are
+  the versioned code registry, listed read-only at `GET /workflows`.
 

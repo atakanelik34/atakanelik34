@@ -47,6 +47,10 @@ _REGISTRY: dict[tuple[str, int], WorkflowDefinition] = {
 }
 
 
+def list_workflows() -> list[WorkflowDefinition]:
+    return sorted(_REGISTRY.values(), key=lambda w: (w.key, w.version))
+
+
 def get_workflow(key: str, version: int) -> WorkflowDefinition:
     try:
         return _REGISTRY[(key, version)]

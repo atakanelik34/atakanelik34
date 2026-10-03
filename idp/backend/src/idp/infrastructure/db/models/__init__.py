@@ -7,6 +7,11 @@ from idp.infrastructure.db.models.documents import (
     ProcessingJob,
     ProcessingStep,
 )
+from idp.infrastructure.db.models.evaluation import (
+    EvaluationDataset,
+    EvaluationItem,
+    EvaluationRun,
+)
 from idp.infrastructure.db.models.extraction import ExtractedField, ExtractionResult
 from idp.infrastructure.db.models.identity import Project, Tenant, User
 from idp.infrastructure.db.models.review import ReviewAction, ReviewTask, ValidationResult
@@ -23,6 +28,9 @@ __all__ = [
     "DocumentPage",
     "DocumentPart",
     "DocumentType",
+    "EvaluationDataset",
+    "EvaluationItem",
+    "EvaluationRun",
     "ExtractedField",
     "ExtractionResult",
     "ProcessingJob",

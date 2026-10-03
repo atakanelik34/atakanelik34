@@ -50,6 +50,10 @@ class AuditAction(StrEnum):
     REVIEW_APPROVED = "review.approved"
     REVIEW_REJECTED = "review.rejected"
     REVIEW_SENT_BACK = "review.sent_back"
+    EVALUATION_DATASET_CREATED = "evaluation.dataset_created"
+    EVALUATION_DATASET_DELETED = "evaluation.dataset_deleted"
+    EVALUATION_ITEMS_IMPORTED = "evaluation.items_imported"
+    EVALUATION_RUN_COMPLETED = "evaluation.run_completed"
 
 
 class AuditEntity(StrEnum):
@@ -60,6 +64,7 @@ class AuditEntity(StrEnum):
     DOCUMENT_TYPE = "document_type"
     REVIEW_TASK = "review_task"
     EXTRACTED_FIELD = "extracted_field"
+    EVALUATION_DATASET = "evaluation_dataset"
 
 
 def record_audit(

@@ -10,6 +10,7 @@ from fastapi import FastAPI
 
 from idp.application.auth import principal_from_user
 from idp.application.jobs import JobRunner, JobScheduler, JobSweeper
+from idp.application.policy import StaticPolicyResolver
 from idp.application.steps.classify import ClassifyStep
 from idp.application.steps.digitize import DigitizeStep
 from idp.application.steps.extract import ExtractStep
@@ -21,6 +22,7 @@ from idp.application.workflows import StepHandler
 from idp.config import Settings
 from idp.container import Container
 from idp.domain.identity import Role
+from idp.domain.routing import PolicySnapshot
 from idp.infrastructure.db.repositories import UserRepository
 from idp.main import create_app
 from idp.providers.digitization.local import HybridDigitizer
@@ -163,6 +165,7 @@ def default_handlers(
         ExtractStep(
             storage=container.storage,
             providers=[RegexExtractor(), KeyValueExtractor(), TableExtractor()],
+            policy=StaticPolicyResolver(PolicySnapshot()),
         ),
         ValidateStep(),
         ReviewStep(),

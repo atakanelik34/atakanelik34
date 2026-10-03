@@ -21,6 +21,7 @@ from arq import cron, func
 from arq.connections import RedisSettings
 
 from idp.application.jobs import JobRunner, JobScheduler, JobSweeper
+from idp.application.policy import StaticPolicyResolver, default_policy
 from idp.application.steps.classify import ClassifyStep
 from idp.application.steps.digitize import DigitizeStep
 from idp.application.steps.extract import ExtractStep
@@ -35,13 +36,12 @@ from idp.infrastructure.queue.jobs import PROCESS_JOB_FUNCTION, ArqJobQueue
 from idp.infrastructure.queue.presence import PresencePublisher
 from idp.infrastructure.queue.redis import WorkerHeartbeat, arq_redis_settings, create_redis
 from idp.infrastructure.storage.factory import create_storage
+from idp.providers.catalog import extraction_providers
 from idp.providers.digitization.local import HybridDigitizer
-from idp.providers.extraction.key_value import KeyValueExtractor
-from idp.providers.extraction.regex_extractor import RegexExtractor
-from idp.providers.extraction.table import TableExtractor
 from idp.providers.ocr.factory import create_ocr_engine
 from idp.providers.ocr.tesseract import TesseractOCREngine
 from idp.providers.probing.local import LocalDocumentProber
+from idp.providers.resilience import BreakerRegistry
 
 log = get_logger(__name__)
 
@@ -76,7 +76,13 @@ async def build_handlers(settings: Settings, ctx: dict[str, Any]) -> dict[str, S
         ClassifyStep(storage=ctx["storage"]),
         ExtractStep(
             storage=ctx["storage"],
-            providers=[RegexExtractor(), KeyValueExtractor(), TableExtractor()],
+            providers=extraction_providers(settings),
+            policy=StaticPolicyResolver(default_policy(settings)),
+            breakers=BreakerRegistry(
+                failure_threshold=settings.breaker_failure_threshold,
+                reset_after_seconds=settings.breaker_reset_seconds,
+            ),
+            provider_timeout_seconds=settings.provider_timeout_seconds,
         ),
         ValidateStep(),
         ReviewStep(),

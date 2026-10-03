@@ -98,6 +98,17 @@ class Settings(BaseSettings):
     # Native text below this quality is treated as unreadable and OCR'd instead.
     native_text_min_quality: float = Field(default=0.5, ge=0, le=1)
 
+    # --- Routing (phase 8) ------------------------------------------------------
+    # Deployment default; tenants get their own versioned policy in phase 9.
+    processing_mode: str = Field(
+        default="LOCAL_ONLY", pattern="^(LOCAL_ONLY|HYBRID|CLOUD_ALLOWED)$"
+    )
+    # Mock providers (labelled is_mock) are refused by the router unless enabled.
+    allow_mock_providers: bool = False
+    provider_timeout_seconds: float = Field(default=120.0, gt=0)
+    breaker_failure_threshold: int = Field(default=5, ge=1)
+    breaker_reset_seconds: float = Field(default=60.0, gt=0)
+
     # --- Auth ---------------------------------------------------------------
     jwt_secret: SecretStr = SecretStr("")
     jwt_algorithm: str = "HS256"

@@ -23,6 +23,7 @@ import { ACTIVE_STATUSES, REPROCESSABLE, type DocumentDetail, type Page } from '
 import { useProcessingResult } from '@/features/extraction/api'
 import { FieldsPanel } from '@/features/extraction/FieldsPanel'
 import type { FieldValue } from '@/features/extraction/types'
+import { isRouteTrace, RouteTraceView } from '@/features/routing/RouteTrace'
 import { DocumentViewer, type Highlight } from '@/features/viewer/DocumentViewer'
 import { formatBytes, formatDateTime } from '@/lib/format'
 
@@ -261,6 +262,14 @@ export function DocumentDetailPage() {
                     </div>
                   </CardHeader>
                   <FieldsPanel part={part} selectedId={selectedField?.id ?? null} onSelect={selectField} />
+                  {isRouteTrace(part.extraction?.route_trace) ? (
+                    <details className="border-t border-border px-4 py-3">
+                      <summary className="cursor-pointer text-xs font-medium">How this was extracted</summary>
+                      <div className="mt-3">
+                        <RouteTraceView trace={part.extraction.route_trace} />
+                      </div>
+                    </details>
+                  ) : null}
                 </Card>
               ))}
             <DetailsCard doc={doc} />

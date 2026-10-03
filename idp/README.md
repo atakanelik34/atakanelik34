@@ -27,7 +27,8 @@ per document by a routing engine that respects a local-first data policy.
 | 5 | Extraction: regex, key/value and table providers, normalisation, confidence, provenance, result contract, extraction panel with source highlighting | ✅ |
 | 6 | Validation: rule registry (field + cross-field), required/confidence checks, stored outcomes | ✅ |
 | 7 | Human review: review queue, workspace (viewer + fields + validation + evidence), corrections, approve/reject/send-back, audit log UI | ✅ |
-| 8–12 | Routing → LLM → enrichment → actions → production hardening | in progress ([roadmap](ARCHITECTURE.md#16-phased-implementation-plan)) |
+| 8 | Routing: signal-based router with policy enforcement, staged fallback, circuit breakers, cost tracking, route trace; evaluation datasets/runs; processing monitor, workflows, providers and evaluation UI | ✅ |
+| 9–12 | LLM → enrichment → actions → production hardening | in progress ([roadmap](ARCHITECTURE.md#16-phased-implementation-plan)) |
 
 The UI shows planned sections in the navigation as disabled with their phase
 number; nothing in the product is simulated.

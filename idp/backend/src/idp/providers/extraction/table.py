@@ -87,7 +87,7 @@ def _assign(words: tuple[Word, ...], columns: list[_Column]) -> dict[str, list[W
 
 
 class TableExtractor:
-    info = ProviderInfo(name="table-extractor", version="1", method="table")
+    info = ProviderInfo(name="table-extractor", version="1", method="table", needs_tables=True)
 
     def assess(self, ctx: ExtractionContext) -> Suitability:
         arrays = [p for p, f in ctx.schema.flatten() if f.type is FieldType.ARRAY]
