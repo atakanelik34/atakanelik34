@@ -33,6 +33,13 @@ x-app-env: &app-env
   # Tesseract ships in the backend image; set to "none" to disable OCR.
   OCR_ENGINE: ${OCR_ENGINE:-tesseract}
   OCR_LANGUAGES: ${OCR_LANGUAGES:-eng+deu}
+  # none | clamav (start the scanner with: docker compose --profile av up -d)
+  MALWARE_SCANNER: ${MALWARE_SCANNER:-none}
+  CLAMAV_HOST: clamav
+  API_RATE_LIMIT_PER_MINUTE: ${API_RATE_LIMIT_PER_MINUTE:-600}
+  UPLOAD_RATE_LIMIT_PER_MINUTE: ${UPLOAD_RATE_LIMIT_PER_MINUTE:-120}
+  METRICS_TOKEN: ${METRICS_TOKEN:-}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
   PROCESSING_MODE: ${PROCESSING_MODE:-LOCAL_ONLY}
   ALLOW_MOCK_PROVIDERS: ${ALLOW_MOCK_PROVIDERS:-false}
   LLM_ALLOWED_HOSTS: ${LLM_ALLOWED_HOSTS:-ollama,localhost,127.0.0.1}
@@ -62,6 +69,13 @@ x-backend: &backend
   image: idp-backend:dev
   networks: [idp]
   restart: unless-stopped
+  # Hardened runtime: read-only root filesystem, scratch space in tmpfs, no
+  # Linux capabilities, no privilege escalation (the image runs as user idp).
+  read_only: true
+  tmpfs:
+    - /tmp:size=1g
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
 
 services:
   postgres:
@@ -201,11 +215,19 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1g }
 
   worker:
     <<: *backend
     command: ["arq", "idp.workers.main.WorkerSettings"]
     environment: *app-env
+    # Prometheus metrics for this worker (scrape on the compose network).
+    expose: ["9100"]
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 3g }
     healthcheck:
       disable: true
     depends_on:
@@ -226,6 +248,30 @@ services:
       api:
         condition: service_healthy
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256m }
+
+  # Optional malware scanning (clamd). Enable with MALWARE_SCANNER=clamav and:
+  #   docker compose --profile av up -d
+  # Signature downloads need outbound access on first start; uploads fail closed
+  # (503) while the scanner is unavailable.
+  clamav:
+    image: clamav/clamav:${CLAMAV_VERSION:-1.4}
+    profiles: ["av"]
+    volumes:
+      - clamav-db:/var/lib/clamav
+    expose: ["3310"]
+    networks: [idp]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits: { memory: 3g }
 
   # Optional local LLM runtime (used from phase 9):  docker compose --profile llm up
   ollama:
@@ -249,3 +295,4 @@ volumes:
   redis-data:
   minio-data:
   ollama-data:
+  clamav-db:

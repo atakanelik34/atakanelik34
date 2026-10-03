@@ -10,7 +10,8 @@ RUN --mount=type=secret,id=extra_ca,required=false \
 COPY . .
 RUN npm run build
 
-FROM nginx:1.27-alpine AS runtime
+# Unprivileged nginx: runs as uid 101, listens on 8080, pid/temp files in /tmp.
+FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 8080

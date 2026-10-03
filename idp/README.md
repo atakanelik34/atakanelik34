@@ -31,10 +31,9 @@ per document by a routing engine that respects a local-first data policy.
 | 9 | LLM: gateway (allow-list, policy, retries, breaker, usage), OpenAI-compatible/Anthropic/Ollama adapters + labelled mock, grounded LLM extraction, LLM classification fallback, tenant processing policy | ✅ |
 | 10 | Enrichment: connections (CSV master data, allow-listed REST, labelled mock ERP), deterministic vendor matching, lookup validation rule, connections UI | ✅ |
 | 11 | Actions: approval-gated, idempotent business actions (signed webhook, SMTP, labelled mock ERP), transactional outbox with subscribed webhooks, API keys and Inbox | ✅ |
-| 12 | Production hardening | in progress ([roadmap](ARCHITECTURE.md#16-phased-implementation-plan)) |
+| 12 | Hardening: Postgres RLS + runtime DB role, ClamAV, per-principal rate limits, Prometheus metrics, optional OpenTelemetry, operations dashboard, non-root read-only containers with resource limits, backups, security review, Compose E2E | ✅ |
 
-The UI shows planned sections in the navigation as disabled with their phase
-number; nothing in the product is simulated.
+All roadmap phases are implemented. Screenshots from the Compose end-to-end run are in [`docs/screenshots/`](docs/screenshots).
 
 ## Quick start (Docker)
 
@@ -84,14 +83,34 @@ The Compose file is a development stack. For production:
 
 * **Object storage:** AWS S3 (or a maintained S3-compatible service) with
   bucket-scoped credentials, SSE (`S3_SSE`) and versioning; not the dev MinIO image.
-* **Database:** managed or replicated PostgreSQL; run migrations with a
-  migration role and the app with a runtime role that cannot alter
-  `audit_logs` (phase 12 adds the role split and row-level security).
+* **Database:** managed or replicated PostgreSQL. Run migrations as the owner
+  role and the API/workers as the runtime role created by
+  `idp provision-db-roles` (no table ownership, subject to row-level security,
+  `audit_logs` insert/select only) — the Compose file already does this.
 * **Network:** only the reverse proxy is public; set `FORWARDED_ALLOW_IPS` on
   the API to the proxy's address/range so client IPs (rate limits, audit) can't
   be spoofed. Terminate TLS at the ingress.
 * **Secrets:** injected per service by your secret manager — each service gets
   only what it needs, as in the Compose file.
+* **Malware scanning:** set `MALWARE_SCANNER=clamav` and run clamd
+  (`docker compose --profile av up -d` in development). Uploads fail closed
+  (503) while the scanner is unreachable.
+* **Observability:** scrape `http://api:8000/metrics` (set `METRICS_TOKEN`) and
+  each worker on port 9100; set `OTEL_EXPORTER_OTLP_ENDPOINT` and install the
+  `otel` extra for tracing.
+* **Backups:** `make backup` (`scripts/backup.sh`) writes a Postgres dump and a
+  mirror of the bucket with checksums; `scripts/restore.sh <dir>` restores
+  (destructive, asks for confirmation). Encrypt and ship backups off-host and
+  test restores regularly.
+* **Hardening already in the images/Compose:** non-root processes, read-only
+  root filesystems, tmpfs scratch, dropped capabilities, `no-new-privileges`,
+  CPU/memory limits. Pin image digests in your registry. See
+  [SECURITY.md](SECURITY.md) for the threat model and residual risks.
+
+### Upgrading an existing installation to phase 12
+
+Add `POSTGRES_APP_PASSWORD` to `.env` (any long random value); the `migrate`
+service creates the runtime role and the API/workers switch to it.
 
 ## Local development (without Docker)
 
@@ -161,7 +180,11 @@ validated at startup by `backend/src/idp/config.py`:
   (e.g. `api.anthropic.com`) and a tenant policy that allows cloud processing.
   Usage and cost per provider are shown on the *Providers & models* page.
 
-## Security notes (phase 1)
+## Security notes
+
+See [SECURITY.md](SECURITY.md) for the full review. Highlights:
+
+### Foundation (phase 1)
 
 * Passwords: argon2id; generic login errors; constant-time path for unknown
   emails; login rate-limited per IP + email in Redis.

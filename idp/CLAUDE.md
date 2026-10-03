@@ -67,6 +67,11 @@ writes except through services. API responses are DTOs, never ORM objects.
 * **Workflow steps** implement `StepHandler` (`application/workflows.py`): do slow
   I/O first, then write through `ctx.session`; never commit; be safe to re-run.
   The runner commits results with the step record after re-checking the lease.
+  The one exception is the `action` step, which commits each external side
+  effect's outcome immediately under a row lock (see ARCHITECTURE §17, phase 11).
+* **New tenant tables** need the RLS policy (`idp_rls_allows(tenant_id)`, see
+  migration 0012) in the same migration; `tests/integration/test_rls.py` fails
+  otherwise. Never call outbound hosts outside the configured allow-lists.
 * **Parsing untrusted files** happens in the probe/provider process pool, never
   in the API process or a worker thread.
 * No `TODO` without a phase reference (e.g. `# Phase 9: …`).

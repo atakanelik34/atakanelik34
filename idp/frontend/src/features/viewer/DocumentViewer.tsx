@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { ErrorNotice, Skeleton } from '@/components/ui/feedback'
-import { usePageImage, usePageLayout, type BBox } from '@/features/viewer/api'
+import { usePageImage, usePageImageSrc, usePageLayout, type BBox } from '@/features/viewer/api'
 import { cn } from '@/lib/utils'
 
 export interface Highlight {
@@ -47,6 +47,7 @@ export function DocumentViewer({
   const [rotation, setRotation] = useState(0)
   const [showText, setShowText] = useState(false)
   const image = usePageImage(documentId, page)
+  const imageSrc = usePageImageSrc(documentId, page)
   const layout = usePageLayout(documentId, page, true)
   const highlightRef = useRef<HTMLDivElement>(null)
   const zoom = ZOOM_STEPS[zoomIndex] ?? 1
@@ -128,8 +129,8 @@ export function DocumentViewer({
         ) : null}
       </div>
       <div className="min-h-0 flex-1 overflow-auto bg-canvas p-4">
-        {image.isError ? (
-          <ErrorNotice error={image.error} title="Page image unavailable" />
+        {image.isError || imageSrc.isError ? (
+          <ErrorNotice error={image.error ?? imageSrc.error} title="Page image unavailable" />
         ) : !image.data ? (
           <Skeleton className="mx-auto aspect-[3/4] w-full max-w-xl" />
         ) : (
@@ -150,12 +151,14 @@ export function DocumentViewer({
               }}
               data-testid="viewer-page"
             >
-              <img
-                src={image.data.url}
-                alt={`Page ${page}`}
-                className="absolute inset-0 h-full w-full select-none"
-                draggable={false}
-              />
+              {imageSrc.src ? (
+                <img
+                  src={imageSrc.src}
+                  alt={`Page ${page}`}
+                  className="absolute inset-0 h-full w-full select-none"
+                  draggable={false}
+                />
+              ) : null}
               {layout.data ? (
                 <div className="absolute inset-0" aria-hidden={!showText}>
                   {layout.data.lines.flatMap((line) =>

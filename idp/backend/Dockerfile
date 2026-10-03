@@ -18,9 +18,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:$PATH" \
     FORWARDED_ALLOW_IPS="127.0.0.1"
 # OCR engine (local, no data leaves the container). Add language packs as needed.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng tesseract-ocr-deu \
-    && rm -rf /var/lib/apt/lists/*
+# Behind a TLS-intercepting proxy (extra_ca secret): fetch packages over HTTPS and
+# trust the proxy CA for this step only.
+# OCR_PACKAGES="" builds an image without OCR (then set OCR_ENGINE=none).
+ARG OCR_PACKAGES="tesseract-ocr tesseract-ocr-eng tesseract-ocr-deu"
+RUN --mount=type=secret,id=extra_ca,required=false \
+    if [ -z "$OCR_PACKAGES" ]; then exit 0; fi; \
+    if [ -s /run/secrets/extra_ca ]; then \
+      sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources; \
+      echo 'Acquire::https::CAInfo "/run/secrets/extra_ca";' > /etc/apt/apt.conf.d/99extra-ca; \
+    fi \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends $OCR_PACKAGES \
+    && rm -rf /var/lib/apt/lists/* /etc/apt/apt.conf.d/99extra-ca
 RUN groupadd --system idp && useradd --system --gid idp --home-dir /app --shell /usr/sbin/nologin idp
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv

@@ -787,7 +787,7 @@ latency/doc. Human review corrections feed new ground truth.
 | **9** LLM ✅ | Gateway, OpenAI-compatible/Anthropic/Ollama adapters, structured output, policy enforcement, token/cost accounting | LOCAL_ONLY provably blocks cloud |
 | **10** Enrichment ✅ | REST/DB connectors, mock SAP/ERP, vendor lookup tool | enrichment results stored |
 | **11** Actions ✅ | Webhook, email, mock ERP action, authorisation, idempotent action runs, event outbox (first consumer), API keys for machine ingestion | actions only when workflow allows |
-| **12** Hardening | Tenant RLS, separate migration/runtime DB roles, API rate limits, OpenTelemetry, Prometheus, backups, sandboxed parsers, non-root nginx, image digests + resource limits, production manifests, ClamAV adapter, security review | prod checklist |
+| **12** Hardening ✅ | Tenant RLS, separate migration/runtime DB roles, API rate limits, OpenTelemetry, Prometheus, backups, sandboxed parsers, non-root nginx, image digests + resource limits, production manifests, ClamAV adapter, security review | prod checklist |
 
 ---
 
@@ -1052,4 +1052,46 @@ revisited deliberately. Deferred items name the phase that owns them.
 * **Deferred**: e-mail/SFTP ingestion channels (the ingestion service already
   takes a `DocumentSource`; adapters are new channels, not new pipeline code);
   per-endpoint webhook rate limits.
+
+### Phase 12 — Hardening
+* **Row-level security** (migration 0012): `idp_rls_allows(tenant_id)` policy
+  on every tenant table and `tenants`; `app.tenant_id` is set per transaction
+  by a session hook — the principal's tenant for authenticated requests,
+  `*` (system) for unauthenticated endpoints, workers, sweeper, relay and CLI;
+  empty means no rows. Defence in depth on top of repository filters. New
+  tenant tables must add the policy; a test enforces it.
+* **Role split**: migrations run as the owner; `idp provision-db-roles`
+  (run by the `migrate` service) creates/updates `idp_app` — LOGIN, no
+  superuser/BYPASSRLS/ownership, CRUD on tables, `audit_logs` INSERT/SELECT
+  only, default privileges for future tables. Passwords are quoted
+  server-side and never appear in errors.
+* **Malware scanning**: `ClamdScanner` (INSTREAM over TCP). Unreachable or
+  verdict-less scanners fail closed (503); infected files are refused and
+  audited with the signature; `not_scanned` stays the honest default.
+* **Rate limits**: per principal (user or API key) for all authenticated
+  requests, and separately for uploads, in Redis fixed windows.
+* **Observability**: Prometheus registry (HTTP by route *template*, job
+  outcomes and duration, LLM calls/tokens, outbox) at `/metrics` on the API
+  (optional bearer token; not proxied publicly) and on each worker's port;
+  OpenTelemetry tracing as an optional extra; tenant overview endpoint and
+  dashboard (documents, open reviews, straight-through rate, machine time,
+  failures, actions, model usage).
+* **Same-origin page images**: the viewer loads page images through the API
+  as blob URLs, so the CSP keeps `img-src 'self' data: blob:` regardless of
+  where object storage lives (found by the Compose E2E run).
+* **Containers**: non-root nginx (`nginx-unprivileged`) and backend, read-only
+  root filesystems with tmpfs scratch, `cap_drop: ALL`, `no-new-privileges`,
+  CPU/memory limits; optional `clamav` service (`av` profile).
+* **Backups**: `scripts/backup.sh` (pg_dump custom format + bucket mirror +
+  checksums) and `scripts/restore.sh` (verifies checksums, confirmation
+  prompt, re-provisions grants).
+* **E2E verification**: the full Compose stack was built and run (migrations,
+  role provisioning, bootstrap, upload → digitize → classify → extract →
+  enrich → validate → review/approve-actions → mock ERP posting → outbox) and
+  every UI area screenshotted (`docs/screenshots/`). In the build sandbox the
+  Debian package mirror is blocked by egress policy, so that run used an image
+  built with `OCR_PACKAGES=""` and `OCR_ENGINE=none`; the default image
+  includes Tesseract.
+* **Deferred**: Office (DOCX/XLSX) conversion (needs a sandboxed converter),
+  image digest pinning and a hashed Python lockfile (see SECURITY.md).
 

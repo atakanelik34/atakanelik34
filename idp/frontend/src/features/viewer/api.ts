@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { useEffect, useMemo } from 'react'
 
 import { apiRequest } from '@/lib/api'
 
@@ -45,6 +46,28 @@ export function usePageImage(documentId: string, page: number) {
     staleTime: IMAGE_STALE_MS,
     refetchInterval: IMAGE_STALE_MS,
   })
+}
+
+/**
+ * The page image as a same-origin blob URL. Images are fetched through the API
+ * (with the session's bearer token) rather than from object storage, so the
+ * Content-Security-Policy can stay `img-src 'self' blob:` in every deployment.
+ */
+export function usePageImageSrc(documentId: string, page: number) {
+  const blob = useQuery({
+    queryKey: ['documents', 'page-image-content', documentId, page],
+    queryFn: ({ signal }) =>
+      apiRequest<Blob>(`/documents/${documentId}/pages/${page}/image/content`, { signal, responseType: 'blob' }),
+    staleTime: Infinity,
+  })
+  const src = useMemo(() => (blob.data ? URL.createObjectURL(blob.data) : null), [blob.data])
+  useEffect(
+    () => () => {
+      if (src) URL.revokeObjectURL(src)
+    },
+    [src],
+  )
+  return { src, isError: blob.isError, error: blob.error }
 }
 
 export function usePageLayout(documentId: string, page: number, enabled: boolean) {

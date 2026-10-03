@@ -43,6 +43,14 @@ async def test_digitized_pages_expose_geometry_and_images(
     assert fetched.status_code == 200
     assert fetched.content[:4] == b"RIFF"  # WEBP
     assert image["width"] > 0
+    # Same-origin variant used by the viewer (CSP img-src 'self' blob:).
+    content = await client.get(f"/api/v1/documents/{doc_id}/pages/1/image/content", headers=owner)
+    assert content.status_code == 200
+    assert content.headers["content-type"] == "image/webp"
+    assert content.content == fetched.content
+    assert (
+        await client.get(f"/api/v1/documents/{doc_id}/pages/1/image/content")
+    ).status_code == 401
 
     timeline = (await client.get(f"/api/v1/documents/{doc_id}/timeline", headers=owner)).json()
     digitize = next(s for s in timeline["jobs"][0]["steps"] if s["step_key"] == "digitize")

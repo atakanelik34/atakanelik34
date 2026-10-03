@@ -1,27 +1,40 @@
 # Only needed when building behind a TLS-intercepting proxy:
 #   EXTRA_CA_CERT=/path/to/corporate-ca.pem \
 #   docker compose -f docker-compose.yml -f docker-compose.proxy-ca.example.yml up --build
+# Builds use the host network so a proxy on localhost (HTTPS_PROXY) is reachable.
 services:
   migrate:
     build:
       context: ./backend
       secrets: [extra_ca]
+      network: host
+      args: &proxy-args
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        https_proxy: ${HTTPS_PROXY:-}
   bootstrap:
     build:
       context: ./backend
       secrets: [extra_ca]
+      network: host
+      args: *proxy-args
   api:
     build:
       context: ./backend
       secrets: [extra_ca]
+      network: host
+      args: *proxy-args
   worker:
     build:
       context: ./backend
       secrets: [extra_ca]
+      network: host
+      args: *proxy-args
   frontend:
     build:
       context: ./frontend
       secrets: [extra_ca]
+      network: host
+      args: *proxy-args
 
 secrets:
   extra_ca:

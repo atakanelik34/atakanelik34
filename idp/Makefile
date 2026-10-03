@@ -1,5 +1,5 @@
 # Developer entry points. Everything also works with plain docker compose / npm / pytest.
-.PHONY: env up down logs bootstrap backend-install backend-check backend-test frontend-install frontend-check check
+.PHONY: env up down logs backup bootstrap backend-install backend-check backend-test frontend-install frontend-check check
 
 COMPOSE := docker compose
 PY := backend/.venv/bin
@@ -16,6 +16,9 @@ down:
 
 logs:
 	$(COMPOSE) logs -f api worker
+
+backup:         ## database dump + bucket mirror into backups/<timestamp>
+	scripts/backup.sh
 
 backend-install:
 	cd backend && python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'

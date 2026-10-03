@@ -58,10 +58,12 @@ interface RequestOptions {
   signal?: AbortSignal
   /** Skip attaching the bearer token (login). */
   anonymous?: boolean
+  /** Return the body as a Blob (binary content such as page images). */
+  responseType?: 'json' | 'blob'
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const headers: Record<string, string> = { Accept: 'application/json' }
+  const headers: Record<string, string> = { Accept: options.responseType === 'blob' ? '*/*' : 'application/json' }
   const isForm = options.body instanceof FormData
   // FormData sets its own multipart boundary; JSON bodies are serialised here.
   if (options.body !== undefined && !isForm) headers['Content-Type'] = 'application/json'
@@ -93,6 +95,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
   if (response.ok) {
     if (response.status === 204) return undefined as T
+    if (options.responseType === 'blob') return (await response.blob()) as T
     return (await response.json()) as T
   }
 

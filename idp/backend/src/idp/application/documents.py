@@ -40,9 +40,10 @@ from idp.infrastructure.db.models import (
     SchemaVersion,
 )
 from idp.infrastructure.layout_store import load_layout
-from idp.infrastructure.storage.base import ObjectStorageProvider
+from idp.infrastructure.storage.base import ObjectStorageProvider, read_bytes
 
 MAX_PAGE_SIZE = 100
+MAX_PAGE_IMAGE_BYTES = 25 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,6 +215,15 @@ class DocumentService:
         return page, DownloadLink(
             url=url, expires_at=datetime.now(UTC) + timedelta(seconds=self._ttl)
         )
+
+    async def page_image_bytes(
+        self, principal: Principal, document_id: uuid.UUID, number: int
+    ) -> bytes:
+        """Rendered page image, served same-origin (no third-party origin in the CSP)."""
+        page = await self.page(principal, document_id, number)
+        if page.image_key is None:
+            raise NotFoundError("Page has not been digitized yet")
+        return await read_bytes(self._storage, page.image_key, max_bytes=MAX_PAGE_IMAGE_BYTES)
 
     async def page_layout(
         self, principal: Principal, document_id: uuid.UUID, number: int

@@ -17,6 +17,9 @@ describe('DocumentViewer', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
       const url = String(input)
       const page = url.includes('/pages/2/') ? 2 : 1
+      if (url.endsWith('/image/content')) {
+        return Promise.resolve(new Response(`page-${page}`, { headers: { 'Content-Type': 'image/webp' } }))
+      }
       if (url.endsWith('/image')) {
         return Promise.resolve(json({ page_number: page, url: `https://store/p${page}.webp`, width: 850, height: 1100, expires_at: '' }))
       }
@@ -33,7 +36,7 @@ describe('DocumentViewer', () => {
     })
     renderRoutes([{ path: '/', element: <Harness highlights={[{ page: 2, bbox: [0.5, 0.5, 0.6, 0.55], label: 'total' }]} /> }], '/')
 
-    expect(await screen.findByAltText('Page 1')).toHaveAttribute('src', 'https://store/p1.webp')
+    expect(await screen.findByAltText('Page 1')).toHaveAttribute('src', expect.stringMatching(/^blob:/))
     expect(await screen.findByText('Total1')).toBeInTheDocument()
     expect(screen.queryByTestId('viewer-highlight')).not.toBeInTheDocument()
 

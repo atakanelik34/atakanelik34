@@ -191,6 +191,22 @@ async def page_image(
     )
 
 
+@router.get("/{document_id}/pages/{number}/image/content", response_class=Response)
+async def page_image_content(
+    document_id: uuid.UUID,
+    number: Annotated[int, Path(ge=1)],
+    principal: Reader,
+    documents: Documents,
+) -> Response:
+    """The rendered page image itself (WEBP), served from the API's own origin."""
+    data = await documents.page_image_bytes(principal, document_id, number)
+    return Response(
+        data,
+        media_type="image/webp",
+        headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"},
+    )
+
+
 @router.get("/{document_id}/pages/{number}/layout", response_model=PageLayoutOut)
 async def page_layout(
     document_id: uuid.UUID,

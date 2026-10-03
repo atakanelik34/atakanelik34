@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { ErrorNotice, Skeleton } from '@/components/ui/feedback'
 import { hasPermission, useMe } from '@/features/auth/api'
+import { OverviewCards } from '@/features/dashboard/OverviewCards'
 import { useSystemStatus, type WorkerInfo } from '@/features/system/api'
 import { ComponentList } from '@/features/system/ComponentList'
 import { StatusBadge } from '@/features/system/StatusBadge'
@@ -56,7 +57,7 @@ export function DashboardPage() {
     <>
       <PageHeader
         title="Dashboard"
-        description="Platform health. Processing metrics appear here once document ingestion is enabled."
+        description="Processing at a glance and platform health."
         actions={
           canReadSystem ? (
             <Button
@@ -72,6 +73,11 @@ export function DashboardPage() {
         }
       />
 
+      {hasPermission(me, 'documents:read') ? (
+        <div className="mb-6">
+          <OverviewCards />
+        </div>
+      ) : null}
       {!canReadSystem ? (
         <Card>
           <CardContent className="text-sm text-muted">
