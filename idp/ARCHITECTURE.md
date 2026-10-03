@@ -1,6 +1,6 @@
 # IDP Platform — Architecture
 
-> Status: **Phases 0, 1, 1.5 (review fixes) and 2 (ingestion + execution skeleton) implemented.**
+> Status: see the roadmap table in §16 (each phase is marked when implemented) and the decision log in §17.
 > This document is the source of truth for structure and contracts. When code
 > and this document disagree, fix one of them in the same change.
 
@@ -778,7 +778,7 @@ latency/doc. Human review corrections feed new ground truth.
 | **1** Foundation | Backend skeleton (layers, config, logging, error taxonomy, correlation IDs), Postgres + Alembic (tenants, users, projects, audit_logs), Redis, object-storage port with S3/MinIO + local adapters, arq worker with heartbeat, health/readiness, auth (login, JWT, RBAC, login rate limit), bootstrap CLI, frontend shell (login, dashboard with live system status, users, settings), Docker Compose, CI | ✅ tests, lint, types green; `docker compose up` works end-to-end |
 | **1.5** Review fixes | Worker presence independent of job slots; trusted-proxy range + unpublished API port; coarse document status; streaming storage port; job-durability design; config-derived provider locality; stable row ids; per-service env + bucket-scoped S3 credentials; migrations/CLI without app secrets | ✅ |
 | **2** Ingestion + execution skeleton | Streamed, size-limited upload; magic-byte MIME allow-list; malware-scanner port (explicit no-op adapter, recorded as `not_scanned`); checksum dedupe; documents + pages; processing jobs/steps with lease claim, step checkpoints, retries, dead-letter, sweeper, replay; audited status changes; first real step: native PDF/image **probe**; document list/detail/timeline UI; signed downloads | upload → probe → COMPLETED; crash/retry/dead-letter/replay covered by tests |
-| **3** Digitization | Classification of probe results (native/scanned/hybrid/image/office), native PDF text + geometry (pypdfium2), page rendering, OCR port, Tesseract adapter + MockOCR, document_pages, layout JSON | native PDFs never OCR'd; geometry stored |
+| **3** Digitization ✅ | Classification of probe results (native/scanned/hybrid/image), native PDF text + geometry (pypdfium2), page rendering, OCR port, Tesseract adapter + MockOCR, document_pages, layout JSON | native PDFs never OCR'd; geometry stored |
 | **4** Taxonomy + classification | Document types, versioned schemas, field definitions, rule classifier, page-level classification, splitter, document_parts | 10-page mixed PDF → 3 parts |
 | **5** Extraction | Provider registry, regex/rules/key-value extractors, normalisers, confidence, provenance | fields with bbox provenance |
 | **6** Validation | Rule engine + built-ins, per-field thresholds, outcomes | invoice math/IBAN/date rules |
@@ -788,3 +788,31 @@ latency/doc. Human review corrections feed new ground truth.
 | **10** Enrichment | REST/DB connectors, mock SAP/ERP, vendor lookup tool | enrichment results stored |
 | **11** Actions | Webhook, email, mock ERP action, authorisation, idempotent action runs, event outbox (first consumer), API keys for machine ingestion | actions only when workflow allows |
 | **12** Hardening | Tenant RLS, separate migration/runtime DB roles, API rate limits, OpenTelemetry, Prometheus, backups, sandboxed parsers, non-root nginx, image digests + resource limits, production manifests, ClamAV adapter, security review | prod checklist |
+
+---
+
+## 17. Decision log
+
+Normal design choices made during implementation, recorded so they can be
+revisited deliberately. Deferred items name the phase that owns them.
+
+### Phase 3 — Digitization
+* **Hybrid per page.** A page uses its native text layer when the text-quality
+  heuristic is ≥ `NATIVE_TEXT_MIN_QUALITY` (0.5); otherwise it is rendered at
+  `OCR_DPI` and sent to the OCR engine. Native PDFs are never OCR'd.
+* **OCR engines run in the worker process** (Tesseract as an async subprocess,
+  TSV output), not in the parser pool; pdfium parsing/rendering stays in the
+  isolated pool. Cloud OCR adapters (future) plug into the same `OCREngine` port
+  and must pass the processing-policy check (phase 9).
+* **`OCR_ENGINE` defaults to `none`** in code (honest: image pages are recorded
+  `ocr_status = not_configured`, nothing is invented); Compose enables the
+  bundled Tesseract. `mock` exists for development and is labelled in metrics/UI.
+* **Geometry storage.** Layout JSON and WEBP page images are written under
+  job-scoped keys (`…/jobs/{job_id}/layout-{n}.json`) so reprocessing never
+  overwrites artefacts an older run (and its extracted fields) reference.
+  `document_pages` points at the latest digitization.
+* **Coordinates** are normalised to the displayed page (rotation applied);
+  verified against rendered glyphs for 0/90/180/270°.
+* **Language detection** is a stopword vote (no ML dependency); `null` when unsure.
+* **Deferred:** Office documents (DOCX/XLSX → PDF via sandboxed LibreOffice) →
+  phase 12; per-tenant OCR language configuration → phase 9 (provider configs).

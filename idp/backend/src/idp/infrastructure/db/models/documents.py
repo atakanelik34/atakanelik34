@@ -100,6 +100,19 @@ class DocumentPage(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base)
     rotation: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="0")
     has_text_layer: Mapped[bool] = mapped_column(Boolean, nullable=False)
     char_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    # --- digitization (phase 3); null until the digitize step has run ---
+    text_source: Mapped[str | None] = mapped_column(String(16))
+    ocr_status: Mapped[str | None] = mapped_column(String(32))
+    text_quality: Mapped[float | None] = mapped_column(Float)
+    ocr_confidence: Mapped[float | None] = mapped_column(Float)
+    language: Mapped[str | None] = mapped_column(String(8))
+    table_density: Mapped[float | None] = mapped_column(Float)
+    word_count: Mapped[int | None] = mapped_column(Integer)
+    layout_key: Mapped[str | None] = mapped_column(String(512))
+    image_key: Mapped[str | None] = mapped_column(String(512))
+    image_width: Mapped[int | None] = mapped_column(Integer)
+    image_height: Mapped[int | None] = mapped_column(Integer)
+    digitized_by_job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
 
 
 class ProcessingJob(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base):

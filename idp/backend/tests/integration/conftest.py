@@ -10,6 +10,7 @@ from fastapi import FastAPI
 
 from idp.application.auth import principal_from_user
 from idp.application.jobs import JobRunner, JobScheduler, JobSweeper
+from idp.application.steps.digitize import DigitizeStep
 from idp.application.steps.probe import ProbeStep
 from idp.application.users import NewUser, TenantBootstrapService, UserService
 from idp.application.workflows import StepHandler
@@ -18,6 +19,7 @@ from idp.container import Container
 from idp.domain.identity import Role
 from idp.infrastructure.db.repositories import UserRepository
 from idp.main import create_app
+from idp.providers.digitization.local import HybridDigitizer
 from idp.providers.probing.local import LocalDocumentProber
 
 OWNER_PASSWORD = "Owner-Password-123!"
@@ -121,15 +123,46 @@ def probe_step(container: Container, prober: LocalDocumentProber) -> ProbeStep:
     return ProbeStep(storage=container.storage, prober=prober, tmp_dir=None)
 
 
+@pytest.fixture(scope="session")
+def digitizer() -> Iterator[HybridDigitizer]:
+    # No OCR engine by default: fast and deterministic. OCR has dedicated tests.
+    d = HybridDigitizer(
+        ocr=None,
+        workers=1,
+        timeout_seconds=60,
+        max_pages=50,
+        memory_limit_mb=2048,
+        render_dpi=72,
+        ocr_dpi=150,
+        min_native_quality=0.5,
+    )
+    yield d
+    d.close()
+
+
+@pytest.fixture
+def digitize_step(container: Container, digitizer: HybridDigitizer) -> DigitizeStep:
+    return DigitizeStep(storage=container.storage, digitizer=digitizer, tmp_dir=None)
+
+
+@pytest.fixture
+def default_handlers(probe_step: ProbeStep, digitize_step: DigitizeStep) -> dict[str, StepHandler]:
+    return {probe_step.key: probe_step, digitize_step.key: digitize_step}
+
+
 @pytest.fixture
 def make_runner(
-    container: Container, scheduler: JobScheduler, settings: Settings, probe_step: ProbeStep
+    container: Container,
+    scheduler: JobScheduler,
+    settings: Settings,
+    default_handlers: dict[str, StepHandler],
 ):  # type: ignore[no-untyped-def]
     def _make(handlers: Mapping[str, StepHandler] | None = None) -> JobRunner:
+        """Real handlers for every step, with `handlers` overriding specific keys."""
         return JobRunner(
             container.session_factory,
             scheduler,
-            handlers if handlers is not None else {"probe": probe_step},
+            {**default_handlers, **(handlers or {})},
             settings,
         )
 

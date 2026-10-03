@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Me, Permission } from '@/features/auth/types'
 import { DocumentDetailPage } from '@/features/documents/DocumentDetailPage'
 import { DocumentsPage } from '@/features/documents/DocumentsPage'
-import type { DocumentDetail, Timeline } from '@/features/documents/types'
+import type { DocumentDetail, Page, Timeline } from '@/features/documents/types'
 import { session } from '@/lib/session'
 import { json, renderRoutes } from '@/test/render'
 
@@ -15,6 +15,25 @@ function me(permissions: Permission[]): Me {
     tenant: { id: 't1', slug: 'acme', name: 'Acme' },
     permissions,
   }
+}
+
+const PAGE: Page = {
+  page_number: 1,
+  width: 612,
+  height: 792,
+  unit: 'pt',
+  rotation: 0,
+  has_text_layer: false,
+  char_count: 0,
+  text_source: null,
+  ocr_status: null,
+  text_quality: null,
+  ocr_confidence: null,
+  language: null,
+  table_density: null,
+  word_count: null,
+  image_width: null,
+  image_height: null,
 }
 
 const DOC: DocumentDetail = {
@@ -31,8 +50,8 @@ const DOC: DocumentDetail = {
   scan_status: 'not_scanned',
   uploaded_by_id: 'u1',
   pages: [
-    { page_number: 1, width: 612, height: 792, unit: 'pt', rotation: 0, has_text_layer: true, char_count: 80 },
-    { page_number: 2, width: 612, height: 792, unit: 'pt', rotation: 0, has_text_layer: false, char_count: 0 },
+    { ...PAGE, page_number: 1, has_text_layer: true, char_count: 80, text_source: 'native', ocr_status: 'not_needed', word_count: 12 },
+    { ...PAGE, page_number: 2, text_source: 'none', ocr_status: 'not_configured' },
   ],
 }
 
@@ -133,7 +152,8 @@ describe('documents', () => {
     expect(within(run).getByText('Dead-lettered')).toBeInTheDocument()
     expect(within(run).getByText(/attempt 3\/3/)).toBeInTheDocument()
     expect(within(run).getAllByText(/Document probe timed out/).length).toBeGreaterThan(0)
-    expect(screen.getByText('image only · OCR needed')).toBeInTheDocument()
+    expect(screen.getByText('image only · OCR not configured')).toBeInTheDocument()
+    expect(screen.getByText('native · 12 words')).toBeInTheDocument()
     expect(screen.getByText('not scanned')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Replay/ })).toBeEnabled()
     session.clear()

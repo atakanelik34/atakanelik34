@@ -31,6 +31,15 @@ class PageOut(BaseModel):
     rotation: int
     has_text_layer: bool
     char_count: int
+    text_source: str | None = None
+    ocr_status: str | None = None
+    text_quality: float | None = None
+    ocr_confidence: float | None = None
+    language: str | None = None
+    table_density: float | None = None
+    word_count: int | None = None
+    image_width: int | None = None
+    image_height: int | None = None
 
 
 class DocumentDetail(DocumentSummary):
@@ -113,3 +122,33 @@ class UploadResponse(BaseModel):
 class DownloadLinkOut(BaseModel):
     url: str
     expires_at: datetime
+
+
+class PageImageOut(BaseModel):
+    page_number: int
+    url: str
+    width: int
+    height: int
+    expires_at: datetime
+
+
+class LayoutWordOut(BaseModel):
+    text: str
+    bbox: list[float]
+    confidence: float | None
+
+
+class LayoutLineOut(BaseModel):
+    id: str
+    text: str
+    bbox: list[float]
+    words: list[LayoutWordOut]
+
+
+class PageLayoutOut(BaseModel):
+    page_number: int
+    source: str
+    text_quality: float
+    language: str | None
+    ocr_confidence: float | None
+    lines: list[LayoutLineOut]

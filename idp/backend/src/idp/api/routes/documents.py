@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
 from starlette.datastructures import UploadFile
 
 from idp.api.deps import ContainerDep, SessionDep, require
@@ -14,6 +14,10 @@ from idp.api.schemas.documents import (
     DownloadLinkOut,
     JobOut,
     JobWithStepsOut,
+    LayoutLineOut,
+    LayoutWordOut,
+    PageImageOut,
+    PageLayoutOut,
     PageOut,
     StatusChangeOut,
     StepOut,
@@ -159,6 +163,54 @@ async def get_timeline(
                 occurred_at=change.occurred_at,
             )
             for change in timeline.status_changes
+        ],
+    )
+
+
+@router.get("/{document_id}/pages/{number}/image", response_model=PageImageOut)
+async def page_image(
+    document_id: uuid.UUID,
+    number: Annotated[int, Path(ge=1)],
+    principal: Reader,
+    documents: Documents,
+) -> PageImageOut:
+    """Signed URL to the rendered page image used by the document viewer."""
+    page, link = await documents.page_image(principal, document_id, number)
+    return PageImageOut(
+        page_number=page.page_number,
+        url=link.url,
+        width=page.image_width or 0,
+        height=page.image_height or 0,
+        expires_at=link.expires_at,
+    )
+
+
+@router.get("/{document_id}/pages/{number}/layout", response_model=PageLayoutOut)
+async def page_layout(
+    document_id: uuid.UUID,
+    number: Annotated[int, Path(ge=1)],
+    principal: Reader,
+    documents: Documents,
+) -> PageLayoutOut:
+    """Words and lines with normalised bounding boxes (origin top-left, 0..1)."""
+    layout = await documents.page_layout(principal, document_id, number)
+    return PageLayoutOut(
+        page_number=layout.page_number,
+        source=layout.source.value,
+        text_quality=layout.text_quality,
+        language=layout.language,
+        ocr_confidence=layout.ocr_confidence,
+        lines=[
+            LayoutLineOut(
+                id=line.id,
+                text=line.text,
+                bbox=line.bbox.as_list(),
+                words=[
+                    LayoutWordOut(text=w.text, bbox=w.bbox.as_list(), confidence=w.confidence)
+                    for w in line.words
+                ],
+            )
+            for line in layout.lines
         ],
     )
 

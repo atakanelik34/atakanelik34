@@ -27,10 +27,14 @@ class WorkflowDefinition:
 
 
 INGEST_V1 = WorkflowDefinition(key="ingest", version=1, steps=("probe",))
+INGEST_V2 = WorkflowDefinition(key="ingest", version=2, steps=("probe", "digitize"))
 
-DEFAULT_WORKFLOW = INGEST_V1
+DEFAULT_WORKFLOW = INGEST_V2
 
-_REGISTRY: dict[tuple[str, int], WorkflowDefinition] = {(w.key, w.version): w for w in (INGEST_V1,)}
+# Old versions stay registered: jobs pinned to them must still run unchanged.
+_REGISTRY: dict[tuple[str, int], WorkflowDefinition] = {
+    (w.key, w.version): w for w in (INGEST_V1, INGEST_V2)
+}
 
 
 def get_workflow(key: str, version: int) -> WorkflowDefinition:

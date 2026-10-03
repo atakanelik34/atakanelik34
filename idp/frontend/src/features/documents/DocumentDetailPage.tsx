@@ -17,7 +17,8 @@ import {
 } from '@/features/documents/api'
 import { ProcessingTimeline } from '@/features/documents/ProcessingTimeline'
 import { DocumentStatusBadge } from '@/features/documents/StatusBadges'
-import { ACTIVE_STATUSES, REPROCESSABLE, type DocumentDetail } from '@/features/documents/types'
+import { ACTIVE_STATUSES, REPROCESSABLE, type DocumentDetail, type Page } from '@/features/documents/types'
+import { DocumentViewer } from '@/features/viewer/DocumentViewer'
 import { formatBytes, formatDateTime } from '@/lib/format'
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -61,6 +62,25 @@ function DetailsCard({ doc }: { doc: DocumentDetail }) {
   )
 }
 
+function TextSourceBadge({ page }: { page: Page }) {
+  if (page.text_source === 'native') {
+    return <Badge tone="success">native · {page.word_count ?? page.char_count} words</Badge>
+  }
+  if (page.text_source === 'ocr') {
+    const conf = page.ocr_confidence !== null ? ` · ${Math.round(page.ocr_confidence * 100)}%` : ''
+    return <Badge tone="accent">OCR{conf}</Badge>
+  }
+  if (page.ocr_status === 'not_configured') {
+    return <Badge tone="warning">image only · OCR not configured</Badge>
+  }
+  if (page.text_source === 'none') return <Badge tone="warning">no readable text</Badge>
+  return page.has_text_layer ? (
+    <Badge tone="neutral">text layer detected</Badge>
+  ) : (
+    <Badge tone="warning">image only · OCR needed</Badge>
+  )
+}
+
 function PagesCard({ doc }: { doc: DocumentDetail }) {
   return (
     <Card>
@@ -88,11 +108,7 @@ function PagesCard({ doc }: { doc: DocumentDetail }) {
                 </TD>
                 <TD className="font-mono text-xs">{p.rotation}°</TD>
                 <TD>
-                  {p.has_text_layer ? (
-                    <Badge tone="success">native · {p.char_count} chars</Badge>
-                  ) : (
-                    <Badge tone="warning">image only · OCR needed</Badge>
-                  )}
+                  <TextSourceBadge page={p} />
                 </TD>
               </TR>
             ))}
@@ -113,6 +129,7 @@ export function DocumentDetailPage() {
   const reprocess = useReprocessDocument(id)
   const remove = useDeleteDocument(id)
   const [actionError, setActionError] = useState<unknown>(null)
+  const [viewerPage, setViewerPage] = useState(1)
   const canWrite = hasPermission(me, 'documents:write')
 
   async function onDownload() {
@@ -192,11 +209,30 @@ export function DocumentDetailPage() {
 
       {doc ? (
         <div className="grid gap-6 lg:grid-cols-5">
+          <div className="lg:col-span-3">
+            {doc.pages.some((p) => p.image_width) ? (
+              <Card className="h-[78vh] overflow-hidden">
+                <DocumentViewer
+                  className="h-full"
+                  documentId={doc.id}
+                  pageCount={doc.page_count ?? 1}
+                  page={viewerPage}
+                  onPageChange={setViewerPage}
+                />
+              </Card>
+            ) : (
+              <Card>
+                <CardContent className="text-sm text-muted">
+                  The page viewer is available once the document has been digitized.
+                </CardContent>
+              </Card>
+            )}
+          </div>
           <div className="space-y-6 lg:col-span-2">
             <DetailsCard doc={doc} />
             <PagesCard doc={doc} />
           </div>
-          <div className="lg:col-span-3">
+          <div className="lg:col-span-5">
             {timeline.data ? (
               <ProcessingTimeline timeline={timeline.data} />
             ) : timeline.isError ? (

@@ -21,6 +21,7 @@ from idp.application.audit import AuditAction, AuditEntity, record_audit
 from idp.application.document_status import change_document_status
 from idp.application.jobs import JobScheduler, JobTrigger
 from idp.domain.errors import ConflictError, NotFoundError, ValidationError
+from idp.domain.geometry import PageLayout
 from idp.domain.identity import Principal
 from idp.domain.lifecycle import (
     ACTIVE_JOB_STATUSES,
@@ -34,6 +35,7 @@ from idp.infrastructure.db.models import (
     ProcessingJob,
     ProcessingStep,
 )
+from idp.infrastructure.layout_store import load_layout
 from idp.infrastructure.storage.base import ObjectStorageProvider
 
 MAX_PAGE_SIZE = 100
@@ -183,6 +185,36 @@ class DocumentService:
             jobs=[JobWithSteps(job=j, steps=by_job.get(j.id, [])) for j in jobs],
             status_changes=changes,
         )
+
+    async def page(self, principal: Principal, document_id: uuid.UUID, number: int) -> DocumentPage:
+        document = await self.get(principal, document_id)
+        page = await self._session.scalar(
+            select(DocumentPage).where(
+                DocumentPage.document_id == document.id, DocumentPage.page_number == number
+            )
+        )
+        if page is None:
+            raise NotFoundError("Page not found")
+        return page
+
+    async def page_image(
+        self, principal: Principal, document_id: uuid.UUID, number: int
+    ) -> tuple[DocumentPage, DownloadLink]:
+        page = await self.page(principal, document_id, number)
+        if page.image_key is None:
+            raise NotFoundError("Page has not been digitized yet")
+        url = await self._storage.signed_url(page.image_key, expires_in=self._ttl)
+        return page, DownloadLink(
+            url=url, expires_at=datetime.now(UTC) + timedelta(seconds=self._ttl)
+        )
+
+    async def page_layout(
+        self, principal: Principal, document_id: uuid.UUID, number: int
+    ) -> PageLayout:
+        page = await self.page(principal, document_id, number)
+        if page.layout_key is None:
+            raise NotFoundError("Page has not been digitized yet")
+        return await load_layout(self._storage, page.layout_key)
 
     async def download_link(self, principal: Principal, document_id: uuid.UUID) -> DownloadLink:
         document = await self.get(principal, document_id)

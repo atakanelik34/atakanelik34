@@ -15,7 +15,6 @@ from sqlalchemy import select, update
 
 from idp.application import workflows
 from idp.application.jobs import JobRunner, JobScheduler, JobSweeper, RunOutcome
-from idp.application.steps.probe import ProbeStep
 from idp.application.workflows import StepContext, StepResult, WorkflowDefinition
 from idp.container import Container
 from idp.domain.errors import ProviderError
@@ -113,7 +112,7 @@ async def test_native_pdf_flows_to_completed_with_audited_timeline(
     job = await _job(container, job_id)
     assert (job.status, job.attempts, job.lease_expires_at) == (JobStatus.SUCCEEDED, 1, None)
     assert (await _document(container, doc_id)).status is DocumentStatus.COMPLETED
-    [step] = await _steps(container, job_id)
+    step = next(s for s in await _steps(container, job_id) if s.step_key == "probe")
     assert step.status is StepStatus.SUCCEEDED
     assert step.metrics == {"page_count": 2, "pages_with_text": 2, "text_layer": "native"}
     assert step.provider == "pdfium-pillow-probe"
@@ -136,7 +135,7 @@ async def test_scanned_pdf_is_flagged_for_ocr(
 ) -> None:
     _, job_id = await _upload(client, owner, files.scanned_pdf(3))
     assert await make_runner().run(job_id) is RunOutcome.SUCCEEDED
-    [step] = await _steps(container, job_id)
+    step = next(s for s in await _steps(container, job_id) if s.step_key == "probe")
     assert step.metrics["text_layer"] == "none"
 
 
@@ -151,7 +150,7 @@ async def test_duplicate_delivery_is_a_no_op(
     assert await runner.run(job_id) is RunOutcome.SUCCEEDED
     assert await runner.run(job_id) is RunOutcome.NOT_CLAIMED
     assert await runner.run(uuid.uuid4()) is RunOutcome.NOT_CLAIMED
-    assert len(await _steps(container, job_id)) == 1
+    assert len(await _steps(container, job_id)) == 2  # probe + digitize, once each
     assert (await _job(container, job_id)).attempts == 1
 
 
@@ -284,7 +283,7 @@ async def test_crashed_worker_is_recovered_after_lease_expiry(
         await session.commit()
 
     assert await make_runner().run(job_id) is RunOutcome.SUCCEEDED
-    steps = await _steps(container, job_id)
+    steps = [s for s in await _steps(container, job_id) if s.step_key == "probe"]
     assert [(s.attempt, s.status, s.error_code) for s in steps] == [
         (1, StepStatus.FAILED, "worker_lost"),
         (2, StepStatus.SUCCEEDED, None),
@@ -333,8 +332,11 @@ async def test_completed_steps_are_checkpointed_across_attempts(
     make_runner: RunnerFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    two_steps = WorkflowDefinition(key="ingest", version=1, steps=("first", "second"))
-    monkeypatch.setitem(workflows._REGISTRY, ("ingest", 1), two_steps)
+    default = workflows.DEFAULT_WORKFLOW
+    two_steps = WorkflowDefinition(
+        key=default.key, version=default.version, steps=("first", "second")
+    )
+    monkeypatch.setitem(workflows._REGISTRY, (default.key, default.version), two_steps)
     first, second = CountingStep("first"), CountingStep("second", fail_first=True)
     runner = make_runner({"first": first, "second": second})
     _, job_id = await _upload(client, owner, files.native_pdf())
@@ -475,12 +477,12 @@ async def test_end_to_end_through_redis_and_arq_worker(
     owner: dict[str, str],
     container: Container,
     settings: Any,
-    probe_step: ProbeStep,
+    default_handlers: dict[str, Any],
 ) -> None:
     real_scheduler = JobScheduler(ArqJobQueue(container.redis), settings)
     container.scheduler = real_scheduler
     doc_id, job_id = await _upload(client, owner, files.native_pdf(2))
-    runner = JobRunner(container.session_factory, real_scheduler, {"probe": probe_step}, settings)
+    runner = JobRunner(container.session_factory, real_scheduler, default_handlers, settings)
 
     async def process_job(ctx: dict[str, Any], job_id: str) -> str:
         return (await runner.run(uuid.UUID(job_id))).value

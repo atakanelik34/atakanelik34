@@ -45,6 +45,15 @@ export interface Page {
   rotation: number
   has_text_layer: boolean
   char_count: number
+  text_source: 'native' | 'ocr' | 'none' | null
+  ocr_status: 'not_needed' | 'done' | 'not_configured' | 'failed' | null
+  text_quality: number | null
+  ocr_confidence: number | null
+  language: string | null
+  table_density: number | null
+  word_count: number | null
+  image_width: number | null
+  image_height: number | null
 }
 
 export interface DocumentDetail extends DocumentSummary {

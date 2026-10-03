@@ -22,8 +22,8 @@ per document by a routing engine that respects a local-first data policy.
 | 1 | Foundation: API, worker, Postgres + migrations, Redis, object storage, auth/RBAC, audit, health, UI shell, Compose, CI | ✅ |
 | 1.5 | Architecture review fixes | ✅ |
 | 2 | Ingestion + execution skeleton: streamed upload, type detection, dedupe, jobs with lease/checkpoints/retries/dead-letter/sweeper/replay, native-vs-scanned page probe, documents UI with processing timeline | ✅ |
-| 3 | Digitization (native text + geometry, OCR port) | next |
-| 4–12 | Taxonomy → … → production hardening | planned ([roadmap](ARCHITECTURE.md#16-phased-implementation-plan)) |
+| 3 | Digitization: native text + geometry, page rendering, OCR port (Tesseract bundled, labelled mock), document viewer | ✅ |
+| 4–12 | Taxonomy → … → production hardening | in progress ([roadmap](ARCHITECTURE.md#16-phased-implementation-plan)) |
 
 The UI shows planned sections in the navigation as disabled with their phase
 number; nothing in the product is simulated.

@@ -87,6 +87,17 @@ class Settings(BaseSettings):
     probe_memory_limit_mb: int = Field(default=2048, ge=256)
     worker_tmp_dir: str | None = None
 
+    # --- Digitization / OCR (phase 3) -------------------------------------------
+    # "none" is honest: image-only pages are marked `ocr: not_configured`.
+    ocr_engine: str = Field(default="none", pattern="^(none|tesseract|mock)$")
+    ocr_languages: str = "eng+deu"
+    tesseract_cmd: str = "tesseract"
+    ocr_timeout_seconds: float = Field(default=120.0, gt=0)
+    render_dpi: int = Field(default=150, ge=72, le=300)
+    ocr_dpi: int = Field(default=300, ge=150, le=600)
+    # Native text below this quality is treated as unreadable and OCR'd instead.
+    native_text_min_quality: float = Field(default=0.5, ge=0, le=1)
+
     # --- Auth ---------------------------------------------------------------
     jwt_secret: SecretStr = SecretStr("")
     jwt_algorithm: str = "HS256"

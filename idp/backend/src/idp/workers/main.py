@@ -21,6 +21,7 @@ from arq import cron, func
 from arq.connections import RedisSettings
 
 from idp.application.jobs import JobRunner, JobScheduler, JobSweeper
+from idp.application.steps.digitize import DigitizeStep
 from idp.application.steps.probe import ProbeStep
 from idp.application.workflows import StepHandler
 from idp.config import Settings, get_settings
@@ -30,6 +31,9 @@ from idp.infrastructure.queue.jobs import PROCESS_JOB_FUNCTION, ArqJobQueue
 from idp.infrastructure.queue.presence import PresencePublisher
 from idp.infrastructure.queue.redis import WorkerHeartbeat, arq_redis_settings, create_redis
 from idp.infrastructure.storage.factory import create_storage
+from idp.providers.digitization.local import HybridDigitizer
+from idp.providers.ocr.factory import create_ocr_engine
+from idp.providers.ocr.tesseract import TesseractOCREngine
 from idp.providers.probing.local import LocalDocumentProber
 
 log = get_logger(__name__)
@@ -37,16 +41,33 @@ log = get_logger(__name__)
 _settings = get_settings()
 
 
-def build_handlers(settings: Settings, ctx: dict[str, Any]) -> dict[str, StepHandler]:
+async def build_handlers(settings: Settings, ctx: dict[str, Any]) -> dict[str, StepHandler]:
     prober = LocalDocumentProber(
         workers=settings.worker_max_jobs,
         timeout_seconds=settings.probe_timeout_seconds,
         max_pages=settings.probe_max_pages,
         memory_limit_mb=settings.probe_memory_limit_mb,
     )
-    ctx["prober"] = prober
-    probe = ProbeStep(storage=ctx["storage"], prober=prober, tmp_dir=settings.worker_tmp_dir)
-    return {probe.key: probe}
+    ocr = create_ocr_engine(settings)
+    if isinstance(ocr, TesseractOCREngine):
+        await ocr.detect_version()
+    digitizer = HybridDigitizer(
+        ocr=ocr,
+        workers=settings.worker_max_jobs,
+        timeout_seconds=settings.probe_timeout_seconds,
+        max_pages=settings.probe_max_pages,
+        memory_limit_mb=settings.probe_memory_limit_mb,
+        render_dpi=settings.render_dpi,
+        ocr_dpi=settings.ocr_dpi,
+        min_native_quality=settings.native_text_min_quality,
+    )
+    ctx["closables"] = [prober, digitizer]
+    log.info("worker.ocr_engine", engine=ocr.name if ocr else "not_configured")
+    steps: list[StepHandler] = [
+        ProbeStep(storage=ctx["storage"], prober=prober, tmp_dir=settings.worker_tmp_dir),
+        DigitizeStep(storage=ctx["storage"], digitizer=digitizer, tmp_dir=settings.worker_tmp_dir),
+    ]
+    return {step.key: step for step in steps}
 
 
 async def startup(ctx: dict[str, Any]) -> None:
@@ -59,7 +80,8 @@ async def startup(ctx: dict[str, Any]) -> None:
     redis = create_redis(_settings)
     ctx.update(engine=engine, app_redis=redis, storage=create_storage(_settings))
     scheduler = JobScheduler(ArqJobQueue(redis), _settings)
-    ctx["runner"] = JobRunner(session_factory, scheduler, build_handlers(_settings, ctx), _settings)
+    handlers = await build_handlers(_settings, ctx)
+    ctx["runner"] = JobRunner(session_factory, scheduler, handlers, _settings)
     ctx["sweeper"] = JobSweeper(session_factory, scheduler, _settings)
 
     hostname = socket.gethostname()
@@ -85,7 +107,8 @@ async def startup(ctx: dict[str, Any]) -> None:
 async def shutdown(ctx: dict[str, Any]) -> None:
     presence: PresencePublisher = ctx["presence"]
     await presence.stop()
-    ctx["prober"].close()
+    for closable in ctx.get("closables", []):
+        closable.close()
     await ctx["app_redis"].aclose()
     await ctx["engine"].dispose()
     log.info("worker.stopped", worker_id=presence.worker_id)

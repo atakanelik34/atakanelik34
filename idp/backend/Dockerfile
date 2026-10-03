@@ -17,6 +17,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH" \
     FORWARDED_ALLOW_IPS="127.0.0.1"
+# OCR engine (local, no data leaves the container). Add language packs as needed.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng tesseract-ocr-deu \
+    && rm -rf /var/lib/apt/lists/*
 RUN groupadd --system idp && useradd --system --gid idp --home-dir /app --shell /usr/sbin/nologin idp
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
