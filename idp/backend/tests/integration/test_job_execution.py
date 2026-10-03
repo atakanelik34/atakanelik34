@@ -150,7 +150,9 @@ async def test_duplicate_delivery_is_a_no_op(
     assert await runner.run(job_id) is RunOutcome.SUCCEEDED
     assert await runner.run(job_id) is RunOutcome.NOT_CLAIMED
     assert await runner.run(uuid.uuid4()) is RunOutcome.NOT_CLAIMED
-    assert len(await _steps(container, job_id)) == 2  # probe + digitize, once each
+    assert len(await _steps(container, job_id)) == len(
+        workflows.DEFAULT_WORKFLOW.steps
+    )  # each step once
     assert (await _job(container, job_id)).attempts == 1
 
 

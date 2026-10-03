@@ -8,14 +8,24 @@ from idp.infrastructure.db.models.documents import (
     ProcessingStep,
 )
 from idp.infrastructure.db.models.identity import Project, Tenant, User
+from idp.infrastructure.db.models.taxonomy import (
+    DocumentPart,
+    DocumentType,
+    SchemaField,
+    SchemaVersion,
+)
 
 __all__ = [
     "AuditLog",
     "Document",
     "DocumentPage",
+    "DocumentPart",
+    "DocumentType",
     "ProcessingJob",
     "ProcessingStep",
     "Project",
+    "SchemaField",
+    "SchemaVersion",
     "Tenant",
     "User",
 ]

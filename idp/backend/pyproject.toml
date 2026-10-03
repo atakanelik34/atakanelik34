@@ -24,6 +24,7 @@ dependencies = [
     "python-multipart>=0.0.18",
     "pypdfium2>=4.30",
     "pillow>=11",
+    "regex>=2024.9",
 ]
 
 [project.optional-dependencies]
@@ -35,6 +36,7 @@ dev = [
     "mypy>=1.13",
     "moto[s3]>=5.0",
     "types-boto3>=1.35",
+    "types-regex>=2024.9",
 ]
 
 [project.scripts]
@@ -59,6 +61,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106", "PLR0913", "PT018", "E501", "PLC0415"]
 "migrations/**" = ["E501"]
+"src/idp/domain/templates.py" = ["E501", "RUF001"]  # multilingual keywords
 
 [tool.mypy]
 python_version = "3.11"

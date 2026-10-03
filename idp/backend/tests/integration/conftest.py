@@ -10,6 +10,7 @@ from fastapi import FastAPI
 
 from idp.application.auth import principal_from_user
 from idp.application.jobs import JobRunner, JobScheduler, JobSweeper
+from idp.application.steps.classify import ClassifyStep
 from idp.application.steps.digitize import DigitizeStep
 from idp.application.steps.probe import ProbeStep
 from idp.application.users import NewUser, TenantBootstrapService, UserService
@@ -146,8 +147,11 @@ def digitize_step(container: Container, digitizer: HybridDigitizer) -> DigitizeS
 
 
 @pytest.fixture
-def default_handlers(probe_step: ProbeStep, digitize_step: DigitizeStep) -> dict[str, StepHandler]:
-    return {probe_step.key: probe_step, digitize_step.key: digitize_step}
+def default_handlers(
+    container: Container, probe_step: ProbeStep, digitize_step: DigitizeStep
+) -> dict[str, StepHandler]:
+    steps: list[StepHandler] = [probe_step, digitize_step, ClassifyStep(storage=container.storage)]
+    return {step.key: step for step in steps}
 
 
 @pytest.fixture

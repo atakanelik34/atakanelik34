@@ -21,6 +21,7 @@ from arq import cron, func
 from arq.connections import RedisSettings
 
 from idp.application.jobs import JobRunner, JobScheduler, JobSweeper
+from idp.application.steps.classify import ClassifyStep
 from idp.application.steps.digitize import DigitizeStep
 from idp.application.steps.probe import ProbeStep
 from idp.application.workflows import StepHandler
@@ -66,6 +67,7 @@ async def build_handlers(settings: Settings, ctx: dict[str, Any]) -> dict[str, S
     steps: list[StepHandler] = [
         ProbeStep(storage=ctx["storage"], prober=prober, tmp_dir=settings.worker_tmp_dir),
         DigitizeStep(storage=ctx["storage"], digitizer=digitizer, tmp_dir=settings.worker_tmp_dir),
+        ClassifyStep(storage=ctx["storage"]),
     ]
     return {step.key: step for step in steps}
 

@@ -144,10 +144,20 @@ describe('documents', () => {
       'GET /api/v1/auth/me': () => json(me(['documents:read', 'documents:write'])),
       'GET /api/v1/documents/d1': () => json(DOC),
       'GET /api/v1/documents/d1/timeline': () => json(TIMELINE),
+      'GET /api/v1/documents/d1/parts': () =>
+        json([
+          {
+            id: 'p1', job_id: 'j1', part_index: 0, page_start: 1, page_end: 2,
+            document_type_id: 't1', document_type_key: 'invoice', document_type_name: 'Invoice',
+            schema_version_id: 'v1', schema_version: 3, classification_confidence: 0.92,
+            classifier: 'rule-classifier@1', classification_reasons: ["page 1: keyword 'invoice'"], status: 'classified',
+          },
+        ]),
     })
     renderRoutes([{ path: '/documents/:id', element: <DocumentDetailPage /> }], '/documents/d1')
 
     expect(await screen.findByRole('heading', { name: 'invoice.pdf' })).toBeInTheDocument()
+    expect(await screen.findByText('pages 1–2 · schema v3')).toBeInTheDocument()
     const run = await screen.findByRole('region', { name: 'Run j1' })
     expect(within(run).getByText('Dead-lettered')).toBeInTheDocument()
     expect(within(run).getByText(/attempt 3\/3/)).toBeInTheDocument()
@@ -165,6 +175,7 @@ describe('documents', () => {
       'GET /api/v1/auth/me': () => json(me(['documents:read'])),
       'GET /api/v1/documents/d1': () => json({ ...DOC, status: 'COMPLETED' }),
       'GET /api/v1/documents/d1/timeline': () => json(TIMELINE),
+      'GET /api/v1/documents/d1/parts': () => json([]),
     })
     renderRoutes([{ path: '/documents/:id', element: <DocumentDetailPage /> }], '/documents/d1')
     expect(await screen.findByRole('button', { name: /Download/ })).toBeInTheDocument()

@@ -32,8 +32,11 @@ from idp.infrastructure.db.models import (
     AuditLog,
     Document,
     DocumentPage,
+    DocumentPart,
+    DocumentType,
     ProcessingJob,
     ProcessingStep,
+    SchemaVersion,
 )
 from idp.infrastructure.layout_store import load_layout
 from idp.infrastructure.storage.base import ObjectStorageProvider
@@ -215,6 +218,40 @@ class DocumentService:
         if page.layout_key is None:
             raise NotFoundError("Page has not been digitized yet")
         return await load_layout(self._storage, page.layout_key)
+
+    async def latest_job(self, document: Document) -> ProcessingJob | None:
+        return await self._session.scalar(
+            select(ProcessingJob)
+            .where(ProcessingJob.document_id == document.id)
+            .order_by(ProcessingJob.created_at.desc())
+            .limit(1)
+        )
+
+    async def parts(
+        self, principal: Principal, document_id: uuid.UUID, job_id: uuid.UUID | None = None
+    ) -> Sequence[tuple[DocumentPart, DocumentType | None, SchemaVersion | None]]:
+        """Parts of the given job, or of the most recent job that produced parts."""
+        document = await self.get(principal, document_id)
+        if job_id is None:
+            job_id = await self._session.scalar(
+                select(DocumentPart.job_id)
+                .join(ProcessingJob, ProcessingJob.id == DocumentPart.job_id)
+                .where(DocumentPart.document_id == document.id)
+                .order_by(ProcessingJob.created_at.desc())
+                .limit(1)
+            )
+            if job_id is None:
+                return []
+        rows = (
+            await self._session.execute(
+                select(DocumentPart, DocumentType, SchemaVersion)
+                .outerjoin(DocumentType, DocumentType.id == DocumentPart.document_type_id)
+                .outerjoin(SchemaVersion, SchemaVersion.id == DocumentPart.schema_version_id)
+                .where(DocumentPart.document_id == document.id, DocumentPart.job_id == job_id)
+                .order_by(DocumentPart.part_index)
+            )
+        ).all()
+        return [(part, doc_type, version) for part, doc_type, version in rows]
 
     async def download_link(self, principal: Principal, document_id: uuid.UUID) -> DownloadLink:
         document = await self.get(principal, document_id)

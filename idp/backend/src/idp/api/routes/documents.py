@@ -24,6 +24,7 @@ from idp.api.schemas.documents import (
     TimelineOut,
     UploadResponse,
 )
+from idp.api.schemas.taxonomy import DocumentPartOut
 from idp.application.documents import DocumentService
 from idp.application.ingestion import IncomingFile, IngestionService
 from idp.domain.documents import DocumentSource
@@ -213,6 +214,26 @@ async def page_layout(
             for line in layout.lines
         ],
     )
+
+
+@router.get("/{document_id}/parts", response_model=list[DocumentPartOut])
+async def list_parts(
+    document_id: uuid.UUID,
+    principal: Reader,
+    documents: Documents,
+    job_id: Annotated[uuid.UUID | None, Query()] = None,
+) -> list[DocumentPartOut]:
+    """Logical documents found in the file (classification + splitting)."""
+    rows = await documents.parts(principal, document_id, job_id)
+    out = []
+    for part, doc_type, version in rows:
+        item = DocumentPartOut.model_validate(part)
+        if doc_type is not None:
+            item.document_type_key, item.document_type_name = doc_type.key, doc_type.name
+        if version is not None:
+            item.schema_version = version.version
+        out.append(item)
+    return out
 
 
 @router.get("/{document_id}/download", response_model=DownloadLinkOut)

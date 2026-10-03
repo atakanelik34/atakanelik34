@@ -128,3 +128,20 @@ export interface UploadResponse {
   document: DocumentSummary
   job_id: string
 }
+
+export interface DocumentPart {
+  id: string
+  job_id: string
+  part_index: number
+  page_start: number
+  page_end: number
+  document_type_id: string | null
+  document_type_key: string | null
+  document_type_name: string | null
+  schema_version_id: string | null
+  schema_version: number | null
+  classification_confidence: number
+  classifier: string
+  classification_reasons: string[]
+  status: 'classified' | 'unclassified'
+}

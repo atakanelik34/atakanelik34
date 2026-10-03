@@ -779,7 +779,7 @@ latency/doc. Human review corrections feed new ground truth.
 | **1.5** Review fixes | Worker presence independent of job slots; trusted-proxy range + unpublished API port; coarse document status; streaming storage port; job-durability design; config-derived provider locality; stable row ids; per-service env + bucket-scoped S3 credentials; migrations/CLI without app secrets | ✅ |
 | **2** Ingestion + execution skeleton | Streamed, size-limited upload; magic-byte MIME allow-list; malware-scanner port (explicit no-op adapter, recorded as `not_scanned`); checksum dedupe; documents + pages; processing jobs/steps with lease claim, step checkpoints, retries, dead-letter, sweeper, replay; audited status changes; first real step: native PDF/image **probe**; document list/detail/timeline UI; signed downloads | upload → probe → COMPLETED; crash/retry/dead-letter/replay covered by tests |
 | **3** Digitization ✅ | Classification of probe results (native/scanned/hybrid/image), native PDF text + geometry (pypdfium2), page rendering, OCR port, Tesseract adapter + MockOCR, document_pages, layout JSON | native PDFs never OCR'd; geometry stored |
-| **4** Taxonomy + classification | Document types, versioned schemas, field definitions, rule classifier, page-level classification, splitter, document_parts | 10-page mixed PDF → 3 parts |
+| **4** Taxonomy + classification ✅ | Document types, versioned schemas, field definitions, rule classifier, page-level classification, splitter, document_parts | 10-page mixed PDF → 3 parts |
 | **5** Extraction | Provider registry, regex/rules/key-value extractors, normalisers, confidence, provenance | fields with bbox provenance |
 | **6** Validation | Rule engine + built-ins, per-field thresholds, outcomes | invoice math/IBAN/date rules |
 | **7** Human review | Review queue, workspace (viewer + fields + validation), bbox highlight, edit/accept/reject/approve/send-back, audit read API | full HITL loop |
@@ -816,3 +816,24 @@ revisited deliberately. Deferred items name the phase that owns them.
 * **Language detection** is a stopword vote (no ML dependency); `null` when unsure.
 * **Deferred:** Office documents (DOCX/XLSX → PDF via sandboxed LibreOffice) →
   phase 12; per-tenant OCR language configuration → phase 9 (provider configs).
+
+### Phase 4 — Taxonomy, classification, splitting
+* **Schema definitions** are Pydantic-validated JSON (`domain/taxonomy.py`) with
+  `extra="forbid"`; at most one draft and one published version per type
+  (partial unique indexes). Publishing retires the previous version; history stays
+  readable. `schema_fields` mirrors published paths for indexing/analytics.
+* **User regexes** (extraction hints) are compiled with the `regex` engine, length
+  capped, and executed with a timeout everywhere they run (ReDoS protection).
+* **Classification is deterministic** (keyword share minus negatives vs.
+  `min_score`), with reasons recorded per part. **Explicit page numbering wins**
+  ("Page 1 of N" starts, "Page k of N" continues) over template first-page
+  markers; markers are phrases specific to first pages. Unmatched pages without
+  a start signal continue the previous part (confidence discounted).
+* **No taxonomy ⇒ unclassified**, never guessed; such parts go to human review
+  (phase 6/7). LLM classification is a routed fallback in phase 9.
+* **Parts are per job**, like geometry, so reprocessing never rewrites history.
+* **Templates** (invoice, receipt, purchase order, delivery note, bank statement,
+  contract) are copied into the tenant's taxonomy; nothing is special-cased.
+* **UI:** "Schemas" is not a separate nav section — schemas are versions of a
+  document type. The editor is a validated JSON editor with a structured field
+  preview; a form-based field builder is a later UX enhancement (not scheduled).

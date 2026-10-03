@@ -4,6 +4,7 @@ import {
   ACTIVE_STATUSES,
   type DocumentDetail,
   type DocumentList,
+  type DocumentPart,
   type DocumentStatus,
   type Job,
   type Timeline,
@@ -83,4 +84,12 @@ export async function openDownload(id: string): Promise<void> {
   const link = await apiRequest<{ url: string; expires_at: string }>(`/documents/${id}/download`)
   // Signed URL to the object store; opened without leaking our origin.
   window.open(link.url, '_blank', 'noopener,noreferrer')
+}
+
+export function useParts(id: string, poll: boolean) {
+  return useQuery({
+    queryKey: [...documentsKey, 'parts', id],
+    queryFn: ({ signal }) => apiRequest<DocumentPart[]>(`/documents/${id}/parts`, { signal }),
+    refetchInterval: poll ? ACTIVE_POLL_MS : false,
+  })
 }

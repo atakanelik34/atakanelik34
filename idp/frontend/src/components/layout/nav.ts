@@ -1,6 +1,5 @@
 import {
   Activity,
-  Braces,
   ClipboardCheck,
   Cpu,
   FileText,
@@ -46,8 +45,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Configure',
     items: [
-      { label: 'Document types', icon: Shapes, plannedPhase: 4 },
-      { label: 'Schemas', icon: Braces, plannedPhase: 4 },
+      { label: 'Document types', icon: Shapes, to: '/document-types', permission: 'config:read' },
       { label: 'Workflows', icon: Workflow, plannedPhase: 8 },
       { label: 'Connections', icon: Plug, plannedPhase: 10 },
       { label: 'Providers & models', icon: Cpu, plannedPhase: 8 },

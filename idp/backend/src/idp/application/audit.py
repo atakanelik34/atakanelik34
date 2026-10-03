@@ -36,6 +36,10 @@ class AuditAction(StrEnum):
     DOCUMENT_PROCESSING_REQUESTED = "document.processing_requested"
     JOB_FAILED = "job.failed"
     JOB_DEAD_LETTERED = "job.dead_lettered"
+    DOCUMENT_TYPE_CREATED = "document_type.created"
+    DOCUMENT_TYPE_UPDATED = "document_type.updated"
+    SCHEMA_DRAFT_SAVED = "schema.draft_saved"
+    SCHEMA_PUBLISHED = "schema.published"
 
 
 class AuditEntity(StrEnum):
@@ -43,6 +47,7 @@ class AuditEntity(StrEnum):
     TENANT = "tenant"
     DOCUMENT = "document"
     JOB = "job"
+    DOCUMENT_TYPE = "document_type"
 
 
 def record_audit(

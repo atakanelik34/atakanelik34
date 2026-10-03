@@ -142,3 +142,22 @@ def image_pdf(text: str) -> bytes:
         f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
     )
     return out.getvalue()
+
+
+MIXED_PACKET_PAGES: list[str | None] = [
+    "ACME Ltd. INVOICE\nInvoice number INV-2026-00123\nInvoice date 03.10.2026\nPage 1 of 3",
+    "Invoice INV-2026-00123 continued\nLine items and amount due\nPage 2 of 3",
+    "Terms and conditions apply\nPage 3 of 3",
+    "DELIVERY NOTE\nDelivery note number DN-77\nShipment to consignee\nPage 1 of 2",
+    "Delivery note DN-77 delivered items\nPage 2 of 2",
+    "SERVICE AGREEMENT\nThis contract is made between the parties hereinafter\nPage 1 of 5",
+    "The agreement term is twelve months between the parties",
+    "Governing law of this contract is German law",
+    "Further provisions of the agreement",
+    "Signature of both parties to the contract",
+]
+
+
+def mixed_packet() -> bytes:
+    """10 pages: invoice (1-3), delivery note (4-5), contract (6-10)."""
+    return make_pdf(MIXED_PACKET_PAGES)

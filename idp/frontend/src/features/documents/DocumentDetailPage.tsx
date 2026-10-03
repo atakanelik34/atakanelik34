@@ -12,9 +12,11 @@ import {
   openDownload,
   useDeleteDocument,
   useDocument,
+  useParts,
   useReprocessDocument,
   useTimeline,
 } from '@/features/documents/api'
+import { PartsCard } from '@/features/documents/PartsCard'
 import { ProcessingTimeline } from '@/features/documents/ProcessingTimeline'
 import { DocumentStatusBadge } from '@/features/documents/StatusBadges'
 import { ACTIVE_STATUSES, REPROCESSABLE, type DocumentDetail, type Page } from '@/features/documents/types'
@@ -126,6 +128,7 @@ export function DocumentDetailPage() {
   const document = useDocument(id)
   const active = document.data ? ACTIVE_STATUSES.includes(document.data.status) : false
   const timeline = useTimeline(id, active)
+  const parts = useParts(id, active)
   const reprocess = useReprocessDocument(id)
   const remove = useDeleteDocument(id)
   const [actionError, setActionError] = useState<unknown>(null)
@@ -229,6 +232,7 @@ export function DocumentDetailPage() {
             )}
           </div>
           <div className="space-y-6 lg:col-span-2">
+            <PartsCard parts={parts.data ?? []} onSelect={setViewerPage} />
             <DetailsCard doc={doc} />
             <PagesCard doc={doc} />
           </div>
