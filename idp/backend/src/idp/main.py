@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from idp.api.errors import register_error_handlers
 from idp.api.middleware import CORRELATION_HEADER, RequestContextMiddleware
-from idp.api.routes import auth, health, system, users
+from idp.api.routes import auth, documents, health, system, users
 from idp.api.routes import storage as storage_routes
 from idp.config import Settings, StorageBackend, get_settings
 from idp.container import Container
@@ -66,6 +66,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api.include_router(health.router)
     api.include_router(auth.router)
     api.include_router(users.router)
+    api.include_router(documents.router)
     api.include_router(system.router)
     if settings.storage_backend is StorageBackend.LOCAL:
         api.include_router(storage_routes.router)

@@ -1,6 +1,8 @@
 import time
 
 import httpx
+from alembic.config import Config as AlembicConfig
+from alembic.script import ScriptDirectory
 
 from idp.container import Container
 from idp.infrastructure.queue.redis import (
@@ -9,6 +11,7 @@ from idp.infrastructure.queue.redis import (
     check_workers,
     write_heartbeat,
 )
+from tests.conftest import BACKEND_ROOT
 from tests.integration.conftest import TenantFixture, login
 
 
@@ -57,7 +60,8 @@ async def test_system_status_reports_components_and_workers(
     components = {c["name"]: c for c in body["components"]}
     assert set(components) == {"database", "redis", "storage", "workers"}
     assert components["database"]["status"] == "up"
-    assert components["database"]["metadata"]["schema_revision"] == "0001"
+    head = ScriptDirectory.from_config(AlembicConfig(str(BACKEND_ROOT / "alembic.ini")))
+    assert components["database"]["metadata"]["schema_revision"] == head.get_current_head()
     assert components["workers"]["status"] == "degraded"
     assert body["status"] == "degraded"
     assert body["environment"] == "test"

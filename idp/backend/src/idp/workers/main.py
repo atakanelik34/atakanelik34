@@ -3,8 +3,9 @@
 Run with:  arq idp.workers.main.WorkerSettings
 
 Workers are stateless and horizontally scalable: every job loads its state from
-Postgres by ID. Phase 1 registers only the presence heartbeat; pipeline steps
-are registered here as phases land.
+Postgres by id, claims it with a lease, and checkpoints per step. Retry policy
+lives in the database (arq's own retries are disabled), and a cluster-wide
+sweeper recovers lost messages and dead workers.
 """
 
 from __future__ import annotations
@@ -13,73 +14,113 @@ import logging
 import os
 import socket
 import time
-from dataclasses import replace
+import uuid
 from typing import Any, ClassVar
 
-from arq import cron
+from arq import cron, func
 from arq.connections import RedisSettings
-from redis.asyncio import Redis
 
-from idp.config import get_settings
+from idp.application.jobs import JobRunner, JobScheduler, JobSweeper
+from idp.application.steps.probe import ProbeStep
+from idp.application.workflows import StepHandler
+from idp.config import Settings, get_settings
+from idp.infrastructure.db.session import create_engine, create_session_factory
 from idp.infrastructure.logging import configure_logging, get_logger
-from idp.infrastructure.queue.redis import (
-    WorkerHeartbeat,
-    arq_redis_settings,
-    clear_heartbeat,
-    create_redis,
-    write_heartbeat,
-)
+from idp.infrastructure.queue.jobs import PROCESS_JOB_FUNCTION, ArqJobQueue
+from idp.infrastructure.queue.presence import PresencePublisher
+from idp.infrastructure.queue.redis import WorkerHeartbeat, arq_redis_settings, create_redis
+from idp.infrastructure.storage.factory import create_storage
+from idp.providers.probing.local import LocalDocumentProber
 
 log = get_logger(__name__)
 
 _settings = get_settings()
-_HEARTBEAT_SECONDS = set(range(0, 60, max(1, min(_settings.worker_heartbeat_seconds, 59))))
 
 
-async def heartbeat(ctx: dict[str, Any]) -> None:
-    beat = replace(ctx["heartbeat"], last_seen_at=time.time())
-    ctx["heartbeat"] = beat
-    redis: Redis = ctx["presence_redis"]
-    await write_heartbeat(redis, beat, ttl_seconds=_settings.worker_heartbeat_seconds * 3)
+def build_handlers(settings: Settings, ctx: dict[str, Any]) -> dict[str, StepHandler]:
+    prober = LocalDocumentProber(
+        workers=settings.worker_max_jobs,
+        timeout_seconds=settings.probe_timeout_seconds,
+        max_pages=settings.probe_max_pages,
+        memory_limit_mb=settings.probe_memory_limit_mb,
+    )
+    ctx["prober"] = prober
+    probe = ProbeStep(storage=ctx["storage"], prober=prober, tmp_dir=settings.worker_tmp_dir)
+    return {probe.key: probe}
 
 
 async def startup(ctx: dict[str, Any]) -> None:
     configure_logging(_settings.log_level, _settings.log_format)
     # arq's CLI installs its own plain-text handler; route through ours only.
     logging.getLogger("arq").handlers.clear()
+
+    engine = create_engine(_settings)
+    session_factory = create_session_factory(engine)
+    redis = create_redis(_settings)
+    ctx.update(engine=engine, app_redis=redis, storage=create_storage(_settings))
+    scheduler = JobScheduler(ArqJobQueue(redis), _settings)
+    ctx["runner"] = JobRunner(session_factory, scheduler, build_handlers(_settings, ctx), _settings)
+    ctx["sweeper"] = JobSweeper(session_factory, scheduler, _settings)
+
     hostname = socket.gethostname()
     now = time.time()
-    ctx["presence_redis"] = create_redis(_settings)
-    ctx["heartbeat"] = WorkerHeartbeat(
-        worker_id=f"{hostname}:{os.getpid()}",
-        hostname=hostname,
-        pid=os.getpid(),
-        version=_settings.pipeline_version,
-        max_jobs=_settings.worker_max_jobs,
-        started_at=now,
-        last_seen_at=now,
+    presence = PresencePublisher(
+        redis,
+        WorkerHeartbeat(
+            worker_id=f"{hostname}:{os.getpid()}",
+            hostname=hostname,
+            pid=os.getpid(),
+            version=_settings.pipeline_version,
+            max_jobs=_settings.worker_max_jobs,
+            started_at=now,
+            last_seen_at=now,
+        ),
+        interval_seconds=_settings.worker_heartbeat_seconds,
     )
-    await heartbeat(ctx)
-    log.info("worker.started", worker_id=ctx["heartbeat"].worker_id)
+    await presence.start()
+    ctx["presence"] = presence
+    log.info("worker.started", worker_id=presence.worker_id)
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:
-    redis: Redis = ctx["presence_redis"]
-    await clear_heartbeat(redis, ctx["heartbeat"].worker_id)
-    await redis.aclose()
-    log.info("worker.stopped", worker_id=ctx["heartbeat"].worker_id)
+    presence: PresencePublisher = ctx["presence"]
+    await presence.stop()
+    ctx["prober"].close()
+    await ctx["app_redis"].aclose()
+    await ctx["engine"].dispose()
+    log.info("worker.stopped", worker_id=presence.worker_id)
+
+
+async def process_job(ctx: dict[str, Any], job_id: str) -> str:
+    runner: JobRunner = ctx["runner"]
+    outcome = await runner.run(uuid.UUID(job_id))
+    return outcome.value
+
+
+async def sweep_jobs(ctx: dict[str, Any]) -> int:
+    sweeper: JobSweeper = ctx["sweeper"]
+    return await sweeper.sweep()
 
 
 class WorkerSettings:
-    functions: ClassVar[list[Any]] = []
-    # unique=False: every worker writes its own presence, not one per cluster.
+    functions: ClassVar[list[Any]] = [
+        # max_tries=1: retries are decided by the database-backed policy, not arq.
+        # keep_result=0: a finished message must never block a later re-dispatch.
+        func(
+            process_job,
+            name=PROCESS_JOB_FUNCTION,
+            max_tries=1,
+            keep_result=0,
+            timeout=_settings.job_lease_seconds,
+        ),
+    ]
+    # Cluster-wide (arq de-duplicates cron runs by id): one sweep per tick.
     cron_jobs: ClassVar[list[Any]] = [
-        cron(heartbeat, second=_HEARTBEAT_SECONDS, unique=False, run_at_startup=False)
+        cron(sweep_jobs, second={0, 30}, run_at_startup=True, keep_result=0, max_tries=1)
     ]
     on_startup = startup
     on_shutdown = shutdown
     redis_settings: RedisSettings = arq_redis_settings(_settings)
     max_jobs = _settings.worker_max_jobs
-    job_timeout = 600
-    keep_result = 3600
+    job_timeout = _settings.job_lease_seconds
     health_check_interval = 30

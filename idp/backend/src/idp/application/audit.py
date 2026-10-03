@@ -28,11 +28,21 @@ class AuditAction(StrEnum):
     AUTH_LOGIN_FAILED = "auth.login_failed"
     USER_CREATED = "user.created"
     TENANT_BOOTSTRAPPED = "tenant.bootstrapped"
+    DOCUMENT_RECEIVED = "document.received"
+    DOCUMENT_DUPLICATE_REJECTED = "document.duplicate_rejected"
+    DOCUMENT_STATUS_CHANGED = "document.status_changed"
+    DOCUMENT_DOWNLOADED = "document.downloaded"
+    DOCUMENT_DELETED = "document.deleted"
+    DOCUMENT_PROCESSING_REQUESTED = "document.processing_requested"
+    JOB_FAILED = "job.failed"
+    JOB_DEAD_LETTERED = "job.dead_lettered"
 
 
 class AuditEntity(StrEnum):
     USER = "user"
     TENANT = "tenant"
+    DOCUMENT = "document"
+    JOB = "job"
 
 
 def record_audit(

@@ -36,6 +36,8 @@ class IDPError(Exception):
 
     category: ErrorCategory = ErrorCategory.SYSTEM_ERROR
     code: str = "system_error"
+    # Overrides the category's default HTTP status where HTTP has a precise code.
+    http_status: int | None = None
 
     def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
         super().__init__(message)
@@ -107,3 +109,22 @@ class RateLimitedError(IDPError):
     def __init__(self, message: str, *, retry_after_seconds: int) -> None:
         super().__init__(message, details={"retry_after_seconds": retry_after_seconds})
         self.retry_after_seconds = retry_after_seconds
+
+
+class PayloadTooLargeError(ValidationError):
+    code = "payload_too_large"
+    http_status = 413
+
+
+class LengthRequiredError(ValidationError):
+    code = "length_required"
+    http_status = 411
+
+
+class UnsupportedMediaTypeError(DocumentError):
+    code = "unsupported_media_type"
+    http_status = 415
+
+
+class DuplicateDocumentError(ConflictError):
+    code = "duplicate_document"

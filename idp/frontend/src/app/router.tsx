@@ -4,6 +4,8 @@ import { AppShell } from '@/components/layout/AppShell'
 import { LoginPage } from '@/features/auth/LoginPage'
 import { RequireAuth } from '@/features/auth/RequireAuth'
 import { DashboardPage } from '@/features/dashboard/DashboardPage'
+import { DocumentDetailPage } from '@/features/documents/DocumentDetailPage'
+import { DocumentsPage } from '@/features/documents/DocumentsPage'
 import { SettingsPage } from '@/features/settings/SettingsPage'
 import { UsersPage } from '@/features/users/UsersPage'
 
@@ -18,6 +20,8 @@ export const routes = [
     ),
     children: [
       { index: true, element: <DashboardPage /> },
+      { path: 'documents', element: <DocumentsPage /> },
+      { path: 'documents/:id', element: <DocumentDetailPage /> },
       { path: 'users', element: <UsersPage /> },
       { path: 'settings', element: <SettingsPage /> },
     ],

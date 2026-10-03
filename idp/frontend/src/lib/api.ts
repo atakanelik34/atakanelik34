@@ -21,6 +21,7 @@ interface ProblemBody {
   error_category?: ErrorCategory
   code?: string
   correlation_id?: string | null
+  details?: Record<string, unknown>
   errors?: { loc: (string | number)[]; msg: string }[]
 }
 
@@ -29,6 +30,7 @@ export class ApiError extends Error {
   readonly category: ErrorCategory
   readonly code: string
   readonly correlationId: string | null
+  readonly details: Record<string, unknown>
   readonly fieldErrors: { loc: (string | number)[]; msg: string }[]
 
   constructor(status: number, body: ProblemBody) {
@@ -38,6 +40,7 @@ export class ApiError extends Error {
     this.category = body.error_category ?? 'SYSTEM_ERROR'
     this.code = body.code ?? 'unknown'
     this.correlationId = body.correlation_id ?? null
+    this.details = body.details ?? {}
     this.fieldErrors = body.errors ?? []
   }
 }
@@ -59,7 +62,9 @@ interface RequestOptions {
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' }
-  if (options.body !== undefined) headers['Content-Type'] = 'application/json'
+  const isForm = options.body instanceof FormData
+  // FormData sets its own multipart boundary; JSON bodies are serialised here.
+  if (options.body !== undefined && !isForm) headers['Content-Type'] = 'application/json'
   const token = session.getToken()
   if (token && !options.anonymous) headers.Authorization = `Bearer ${token}`
 
@@ -68,7 +73,12 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     response = await fetch(`${API_PREFIX}${path}`, {
       method: options.method ?? 'GET',
       headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      body:
+        options.body === undefined
+          ? undefined
+          : isForm
+            ? (options.body as FormData)
+            : JSON.stringify(options.body),
       signal: options.signal,
       credentials: 'same-origin',
     })

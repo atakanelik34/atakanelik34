@@ -24,3 +24,21 @@ export function secondsAgo(epochSeconds: number, now: number = Date.now()): stri
 export function titleCase(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1)
 }
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB']
+  let value = bytes / 1024
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`
+}
+
+export function formatDuration(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return '—'
+  if (ms < 1000) return `${ms} ms`
+  return `${(ms / 1000).toFixed(1)} s`
+}

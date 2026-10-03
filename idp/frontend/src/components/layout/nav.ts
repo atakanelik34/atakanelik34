@@ -37,8 +37,8 @@ export const NAV_GROUPS: NavGroup[] = [
     label: 'Operate',
     items: [
       { label: 'Dashboard', icon: LayoutDashboard, to: '/' },
-      { label: 'Documents', icon: FileText, plannedPhase: 2 },
-      { label: 'Inbox', icon: Inbox, plannedPhase: 2 },
+      { label: 'Documents', icon: FileText, to: '/documents', permission: 'documents:read' },
+      { label: 'Inbox', icon: Inbox, plannedPhase: 10 },
       { label: 'Processing', icon: Activity, plannedPhase: 3 },
       { label: 'Review queue', icon: ClipboardCheck, plannedPhase: 7 },
     ],

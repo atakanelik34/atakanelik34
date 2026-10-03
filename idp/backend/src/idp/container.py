@@ -8,13 +8,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from redis.asyncio import Redis
+from arq.connections import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from idp.application.health import HealthService
+from idp.application.jobs import JobScheduler
 from idp.config import Settings
 from idp.infrastructure.db.session import check_database, create_engine, create_session_factory
+from idp.infrastructure.queue.jobs import ArqJobQueue
 from idp.infrastructure.queue.redis import check_redis, check_workers, create_redis
+from idp.infrastructure.scanning import MalwareScanner, NoMalwareScanner
 from idp.infrastructure.security.rate_limit import RedisRateLimiter
 from idp.infrastructure.security.tokens import TokenService
 from idp.infrastructure.storage.base import ObjectStorageProvider
@@ -27,8 +30,10 @@ class Container:
     settings: Settings
     engine: AsyncEngine
     session_factory: async_sessionmaker[AsyncSession]
-    redis: Redis
+    redis: ArqRedis
     storage: ObjectStorageProvider
+    scanner: MalwareScanner
+    scheduler: JobScheduler
     tokens: TokenService
     login_limiter: RedisRateLimiter
     health: HealthService
@@ -44,6 +49,8 @@ class Container:
             session_factory=create_session_factory(engine),
             redis=redis,
             storage=storage,
+            scanner=NoMalwareScanner(),
+            scheduler=JobScheduler(ArqJobQueue(redis), settings),
             tokens=TokenService(settings),
             login_limiter=RedisRateLimiter(
                 redis,

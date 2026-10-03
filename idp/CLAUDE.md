@@ -64,6 +64,11 @@ writes except through services. API responses are DTOs, never ORM objects.
   no secrets or API origins in the bundle; show `ApiError.category` and
   `correlationId` on failures; planned features appear as disabled nav entries,
   never as mock pages.
+* **Workflow steps** implement `StepHandler` (`application/workflows.py`): do slow
+  I/O first, then write through `ctx.session`; never commit; be safe to re-run.
+  The runner commits results with the step record after re-checking the lease.
+* **Parsing untrusted files** happens in the probe/provider process pool, never
+  in the API process or a worker thread.
 * No `TODO` without a phase reference (e.g. `# Phase 9: …`).
 
 ## Before you push

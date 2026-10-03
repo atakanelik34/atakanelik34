@@ -39,6 +39,8 @@ _HTTP_STATUS_CATEGORY: dict[int, ErrorCategory] = {
     403: ErrorCategory.AUTHORIZATION_ERROR,
     404: ErrorCategory.NOT_FOUND,
     405: ErrorCategory.VALIDATION_ERROR,
+    411: ErrorCategory.VALIDATION_ERROR,
+    415: ErrorCategory.DOCUMENT_ERROR,
     413: ErrorCategory.VALIDATION_ERROR,
     429: ErrorCategory.RATE_LIMITED,
 }
@@ -70,7 +72,7 @@ def problem(
 async def _idp_error_handler(_request: Request, exc: Exception) -> JSONResponse:
     if not isinstance(exc, IDPError):
         return await _unhandled_handler(_request, exc)
-    status = CATEGORY_STATUS[exc.category]
+    status = exc.http_status or CATEGORY_STATUS[exc.category]
     headers: dict[str, str] = {}
     if isinstance(exc, RateLimitedError):
         headers["Retry-After"] = str(exc.retry_after_seconds)

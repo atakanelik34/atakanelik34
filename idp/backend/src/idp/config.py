@@ -72,6 +72,21 @@ class Settings(BaseSettings):
     s3_sse: str | None = None  # e.g. "AES256" or "aws:kms"
     signed_url_ttl_seconds: int = Field(default=300, ge=30, le=3600)
 
+    # --- Ingestion ------------------------------------------------------------
+    max_upload_bytes: int = Field(default=50 * 1024 * 1024, ge=1024)
+
+    # --- Job execution --------------------------------------------------------
+    job_max_attempts: int = Field(default=3, ge=1, le=20)
+    job_retry_base_seconds: float = Field(default=10.0, gt=0)
+    job_retry_max_seconds: float = Field(default=600.0, gt=0)
+    # A RUNNING job whose lease expired is presumed dead and is reclaimed.
+    job_lease_seconds: int = Field(default=900, ge=30)
+    sweeper_queued_grace_seconds: int = Field(default=60, ge=5)
+    probe_timeout_seconds: float = Field(default=120.0, gt=0)
+    probe_max_pages: int = Field(default=2000, ge=1)
+    probe_memory_limit_mb: int = Field(default=2048, ge=256)
+    worker_tmp_dir: str | None = None
+
     # --- Auth ---------------------------------------------------------------
     jwt_secret: SecretStr = SecretStr("")
     jwt_algorithm: str = "HS256"

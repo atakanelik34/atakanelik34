@@ -10,7 +10,7 @@ import json
 import time
 from dataclasses import asdict, dataclass
 
-from arq.connections import RedisSettings
+from arq.connections import ArqRedis, RedisSettings
 from redis.asyncio import Redis
 
 from idp.config import Settings
@@ -21,8 +21,9 @@ HEARTBEAT_KEY_PREFIX = "idp:workers:heartbeat:"
 DEFAULT_QUEUE_NAME = "arq:queue"
 
 
-def create_redis(settings: Settings) -> Redis:
-    client: Redis = Redis.from_url(
+def create_redis(settings: Settings) -> ArqRedis:
+    """One client type for API and worker: plain Redis commands plus arq enqueueing."""
+    client: ArqRedis = ArqRedis.from_url(
         settings.redis_url.get_secret_value(),
         decode_responses=False,
         socket_connect_timeout=5,

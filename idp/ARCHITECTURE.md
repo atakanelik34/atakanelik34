@@ -1,6 +1,6 @@
 # IDP Platform — Architecture
 
-> Status: **Phase 0 (architecture) complete, Phase 1 (foundation) implemented.**
+> Status: **Phases 0, 1, 1.5 (review fixes) and 2 (ingestion + execution skeleton) implemented.**
 > This document is the source of truth for structure and contracts. When code
 > and this document disagree, fix one of them in the same change.
 
@@ -377,13 +377,23 @@ class IngestionChannel(Protocol):            # email, sftp, folder, s3, webhook 
     descriptor: ChannelDescriptor
     async def poll(self) -> AsyncIterator[IncomingFile]   # push channels call IngestionService directly
 class MalwareScanner(Protocol):
-    async def scan(self, data: bytes) -> ScanVerdict      # ClamAV adapter; NoopScanner flagged as such
+    async def scan(self, data: BinaryIO) -> ScanVerdict   # NoMalwareScanner records `not_scanned`; ClamAV in phase 12
 ```
 
-`IngestionService.ingest(IncomingFile, principal)` is the single path for every
-channel: size limit → magic-byte MIME sniff (declared type is advisory) →
-allow-list → malware scan → sha256 → duplicate check → store → `Document` +
-`ProcessingJob` → enqueue → `DocumentReceived` event.
+`IngestionService.ingest(principal, IncomingFile)` is the single path for every
+channel: size limit (Content-Length pre-check, then counted while hashing) →
+magic-byte type detection (declared type is advisory) → allow-list (PDF, PNG,
+JPEG, TIFF; office formats in phase 3) → malware scan → sha256 → duplicate check
+(409 with the existing id) → store → `Document` + `ProcessingJob` + audit in one
+transaction → dispatch after commit. If the database write fails the stored
+object is deleted; an object orphaned by a crash between the two is a phase-12
+retention-sweep item.
+
+**Probe (phase 2 step).** Untrusted files are parsed by pdfium/Pillow in a
+`spawn` process pool with an address-space limit and a timeout: pdfium is not
+thread-safe, and a crashing parser kills a child, not the worker. A crash is a
+retryable `PROVIDER_ERROR`, so a poison-pill file dead-letters after bounded
+attempts; malformed/encrypted/oversized files are non-retryable `DOCUMENT_ERROR`s.
 
 ### Digitization
 
@@ -653,8 +663,9 @@ with an `error_category` extension. Lists are cursor-paginated.
 | Auth | `POST /auth/login`, `GET /auth/me` | 1 ✅ |
 | Users | `GET /users`, `POST /users` (admin) | 1 ✅ |
 | System | `GET /system/status` (component health incl. worker heartbeat) | 1 ✅ |
-| Documents | `POST /documents` (multipart), `GET /documents`, `GET /documents/{id}`, `GET /documents/{id}/download` (signed URL), `DELETE /documents/{id}` (soft) | 2 |
-| Processing | `POST /documents/{id}/process`, `GET /documents/{id}/status`, `GET /documents/{id}/timeline`, `GET /documents/{id}/extraction`, `POST /documents/{id}/validate` | 2–6 |
+| Documents | `POST /documents` (multipart, streamed, size-limited), `GET /documents` (cursor + status filter), `GET /documents/{id}` (with pages), `GET /documents/{id}/download` (signed URL, audited), `DELETE /documents/{id}` (soft) | 2 ✅ |
+| Processing | `POST /documents/{id}/process` (reprocess / replay as a new job), `GET /documents/{id}/timeline` (jobs, steps, audited status history) | 2 ✅ |
+| Results | `GET /documents/{id}/extraction`, `POST /documents/{id}/validate` | 5–6 |
 | Pages | `GET /documents/{id}/pages`, `GET /documents/{id}/pages/{n}/layout`, `GET /documents/{id}/pages/{n}/image` | 3 |
 | Taxonomy | `GET/POST /document-types`, `GET/POST /document-types/{id}/schemas`, `POST /schemas/{id}/publish` | 4 |
 | Review | `GET /reviews`, `GET /reviews/{id}`, `POST /reviews/{id}/fields/{path}` (accept/edit/reject), `POST /reviews/{id}/approve`, `/reject`, `/send-back` | 7 |
