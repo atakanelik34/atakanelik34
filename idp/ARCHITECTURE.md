@@ -781,8 +781,8 @@ latency/doc. Human review corrections feed new ground truth.
 | **3** Digitization ✅ | Classification of probe results (native/scanned/hybrid/image), native PDF text + geometry (pypdfium2), page rendering, OCR port, Tesseract adapter + MockOCR, document_pages, layout JSON | native PDFs never OCR'd; geometry stored |
 | **4** Taxonomy + classification ✅ | Document types, versioned schemas, field definitions, rule classifier, page-level classification, splitter, document_parts | 10-page mixed PDF → 3 parts |
 | **5** Extraction ✅ | Provider registry, regex/rules/key-value extractors, normalisers, confidence, provenance | fields with bbox provenance |
-| **6** Validation | Rule engine + built-ins, per-field thresholds, outcomes | invoice math/IBAN/date rules |
-| **7** Human review | Review queue, workspace (viewer + fields + validation), bbox highlight, edit/accept/reject/approve/send-back, audit read API | full HITL loop |
+| **6** Validation ✅ | Rule engine + built-ins, per-field thresholds, outcomes | invoice math/IBAN/date rules |
+| **7** Human review ✅ | Review queue, workspace (viewer + fields + validation), bbox highlight, edit/accept/reject/approve/send-back, audit read API | full HITL loop |
 | **8** Routing | Router, signals, route trace, fallback, circuit breaker, cost tracking, workflow versions, evaluation datasets | route trace visible in timeline |
 | **9** LLM | Gateway, OpenAI-compatible/Anthropic/Ollama adapters, structured output, policy enforcement, token/cost accounting | LOCAL_ONLY provably blocks cloud |
 | **10** Enrichment | REST/DB connectors, mock SAP/ERP, vendor lookup tool | enrichment results stored |
@@ -860,3 +860,43 @@ revisited deliberately. Deferred items name the phase that owns them.
 * **Stable row ids** (`r_<12 hex>`) are assigned at extraction time.
 * **Results are per (job, part)** and immutable per job; corrections (phase 7)
   update `value`/`status` and keep `original_value` plus an audited action.
+
+### Phase 6 — Validation
+* **Rules are a registry** (`domain/validation.py::RULES`): `regex`, `min`,
+  `max`, `length`, `date_range`, `one_of`, `iban` (mod-97), `tax_number`
+  (per-country formats), `currency` (ISO 4217); cross-field `sum`, `compare`,
+  `line_items_sum`, `line_item_math`. New kinds use `register_rule()`; no
+  `eval`, no user code. Every rule spec is checked when the schema is saved
+  (`check_rule_spec`), including references to unknown fields.
+* **Implicit checks** run for every field: required-but-missing → FAIL;
+  confidence below the field's threshold → REQUIRES_HUMAN. Money math uses
+  `Decimal` with a configurable tolerance (default 0.01).
+* **Outcomes** PASS / WARNING / FAIL / REQUIRES_HUMAN are stored per rule in
+  `validation_results` (job, part, rule id, fields, message, details). FAIL and
+  REQUIRES_HUMAN open a review; WARNING alone does not.
+* Explicit `extraction_hints.fallback = "first_line"` replaced the implicit
+  "string hinted below" heuristic: the fallback is opt-in per field.
+
+### Phase 7 — Human review
+* **Review is a step, not a side channel.** Workflow `ingest` v5 = probe →
+  digitize → classify → extract → validate → review. The review step raises
+  `AwaitingHumanReview` when blocking outcomes exist; the runner sets step
+  WAITING, job WAITING_FOR_REVIEW (still an *active* job, so no concurrent run)
+  and document WAITING_FOR_HUMAN, and creates one `review_task` per job.
+* **Approve resumes the same job** from the next step (enrichment/actions in
+  later phases) with a fresh retry budget (`max_attempts = attempts +
+  job_max_attempts`) and a new dispatch token. Blocking outcomes that remain at
+  approval are recorded as *overridden by* the reviewer (audited), never
+  silently dropped.
+* **Reject** cancels the job and moves the document to REJECTED. **Send back**
+  cancels the job and creates a new job (`trigger=review_send_back`) — results of
+  the cancelled run stay immutable for audit.
+* **Corrections** (accept/edit/reject field, add/delete row) update
+  `extracted_fields.value/status`, keep `original_value`, write a
+  `review_actions` row and an audit entry in the same transaction. Validation is
+  re-run on the corrected values so the reviewer sees what still blocks.
+* **Claiming** assigns the task (`in_progress`). Once assigned, only the
+  assignee may act; admins (`users:write`) can take over a stuck task. An
+  unassigned open task can be worked by any reviewer with `reviews:write`.
+* Audit log read API (`GET /audit-logs`, cursor paginated, `audit:read`) and UI.
+

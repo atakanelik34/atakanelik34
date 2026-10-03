@@ -53,7 +53,7 @@ INVOICE = {
             "string",
             required=True,
             aliases=["from", "seller", "supplier", "lieferant"],
-            extraction_hints={"position": "below"},
+            extraction_hints={"position": "any", "fallback": "first_line"},
         ),
         _f(
             "vendor_tax_number",
@@ -205,7 +205,12 @@ RECEIPT = {
         "min_score": 0.6,
     },
     "fields": [
-        _f("merchant_name", "string", required=True, extraction_hints={"position": "below"}),
+        _f(
+            "merchant_name",
+            "string",
+            required=True,
+            extraction_hints={"position": "any", "fallback": "first_line"},
+        ),
         _f("receipt_date", "date", required=True, aliases=["date", "datum", "tarih"]),
         _f(
             "total",
@@ -371,7 +376,7 @@ CONTRACT = {
         "min_score": 0.6,
     },
     "fields": [
-        _f("title", "string", extraction_hints={"position": "below"}),
+        _f("title", "string", extraction_hints={"position": "any", "fallback": "first_line"}),
         _f("effective_date", "date", aliases=["effective date", "dated", "commencement date"]),
         _f("party_a", "string", aliases=["between", "party a"]),
         _f("party_b", "string", aliases=["and", "party b"]),

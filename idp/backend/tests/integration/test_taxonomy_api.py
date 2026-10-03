@@ -163,3 +163,9 @@ async def test_without_taxonomy_parts_are_unclassified(
     assert [(p["page_start"], p["page_end"], p["status"]) for p in parts] == [
         (1, 2, "unclassified")
     ]
+
+
+@pytest.fixture(autouse=True)
+def _workflow(pin_workflow) -> None:  # type: ignore[no-untyped-def]
+    # These tests exercise stages before validation/review (workflow ingest v3).
+    pin_workflow(3)

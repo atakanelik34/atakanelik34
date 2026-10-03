@@ -96,3 +96,9 @@ async def test_unclassified_documents_have_no_fields(
     assert part["classification"]["document_type"] is None
     assert part["fields"] == {}
     assert part["extraction"] is None
+
+
+@pytest.fixture(autouse=True)
+def _workflow(pin_workflow) -> None:  # type: ignore[no-untyped-def]
+    # These tests exercise stages before validation/review (workflow ingest v4).
+    pin_workflow(4)

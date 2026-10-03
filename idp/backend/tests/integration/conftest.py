@@ -14,6 +14,8 @@ from idp.application.steps.classify import ClassifyStep
 from idp.application.steps.digitize import DigitizeStep
 from idp.application.steps.extract import ExtractStep
 from idp.application.steps.probe import ProbeStep
+from idp.application.steps.review import ReviewStep
+from idp.application.steps.validate import ValidateStep
 from idp.application.users import NewUser, TenantBootstrapService, UserService
 from idp.application.workflows import StepHandler
 from idp.config import Settings
@@ -162,6 +164,8 @@ def default_handlers(
             storage=container.storage,
             providers=[RegexExtractor(), KeyValueExtractor(), TableExtractor()],
         ),
+        ValidateStep(),
+        ReviewStep(),
     ]
     return {step.key: step for step in steps}
 
@@ -200,3 +204,15 @@ async def upload(
     return await client.post(
         "/api/v1/documents", headers=headers, files={"file": (filename, data, content_type)}
     )
+
+
+@pytest.fixture
+def pin_workflow(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
+    """Create new jobs with a specific built-in workflow version (tests of earlier stages)."""
+    from idp.application import jobs as jobs_module
+    from idp.application.workflows import get_workflow
+
+    def _pin(version: int) -> None:
+        monkeypatch.setattr(jobs_module, "DEFAULT_WORKFLOW", get_workflow("ingest", version))
+
+    return _pin

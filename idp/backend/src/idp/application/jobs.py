@@ -29,6 +29,7 @@ from idp.application.audit import ActorType, AuditAction, AuditEntity, record_au
 from idp.application.document_status import change_document_status
 from idp.application.workflows import (
     DEFAULT_WORKFLOW,
+    AwaitingHumanReview,
     StepContext,
     StepHandler,
     get_workflow,
@@ -55,6 +56,7 @@ class JobTrigger(StrEnum):
     UPLOAD = "upload"
     REPROCESS = "reprocess"
     REPLAY = "replay"
+    REVIEW_SEND_BACK = "review_send_back"
 
 
 class RunOutcome(StrEnum):
@@ -64,6 +66,7 @@ class RunOutcome(StrEnum):
     FAILED = "failed"
     DEAD_LETTERED = "dead_lettered"
     LOST_LEASE = "lost_lease"
+    WAITING_FOR_REVIEW = "waiting_for_review"
 
 
 class _LeaseLostError(Exception):
@@ -297,12 +300,53 @@ class JobRunner:
                 await session.rollback()
                 log.warning("job.lease_lost", step=handler.key)
                 return RunOutcome.LOST_LEASE
+            except AwaitingHumanReview as signal:
+                return await self._pause(
+                    session,
+                    job_id=job_id,
+                    fence=fence,
+                    step_id=step_id,
+                    signal=signal,
+                    started=started,
+                )
             except Exception as exc:
                 await session.rollback()
                 duration = int((time.perf_counter() - started) * 1000)
                 return await self._fail(job_id, fence, step_id, exc, duration)
         log.info("job.step_succeeded", step=handler.key, metrics=result.metrics)
         return None
+
+    async def _pause(
+        self,
+        session: AsyncSession,
+        *,
+        job_id: uuid.UUID,
+        fence: int,
+        step_id: uuid.UUID,
+        signal: AwaitingHumanReview,
+        started: float,
+    ) -> RunOutcome:
+        """Persist the step's pending writes and park the job for a human."""
+        try:
+            job = await self._fenced(session, job_id, fence)
+            step_row = _require(await session.get(ProcessingStep, step_id), "step")
+            step_row.status = StepStatus.WAITING
+            step_row.metrics = {"reasons": len(signal.reasons)}
+            step_row.duration_ms = int((time.perf_counter() - started) * 1000)
+            job.status = JobStatus.WAITING_FOR_REVIEW
+            job.lease_expires_at = None
+            document = _require(
+                await session.get(Document, job.document_id, with_for_update=True), "document"
+            )
+            change_document_status(
+                session, document, DocumentStatus.WAITING_FOR_HUMAN, reason="human review required"
+            )
+            await session.commit()
+        except _LeaseLostError:
+            await session.rollback()
+            return RunOutcome.LOST_LEASE
+        log.info("job.waiting_for_review", reasons=len(signal.reasons))
+        return RunOutcome.WAITING_FOR_REVIEW
 
     async def _succeed(
         self, job_id: uuid.UUID, fence: int, final_status: DocumentStatus, workflow_key: str

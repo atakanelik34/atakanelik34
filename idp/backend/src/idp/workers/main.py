@@ -25,6 +25,8 @@ from idp.application.steps.classify import ClassifyStep
 from idp.application.steps.digitize import DigitizeStep
 from idp.application.steps.extract import ExtractStep
 from idp.application.steps.probe import ProbeStep
+from idp.application.steps.review import ReviewStep
+from idp.application.steps.validate import ValidateStep
 from idp.application.workflows import StepHandler
 from idp.config import Settings, get_settings
 from idp.infrastructure.db.session import create_engine, create_session_factory
@@ -76,6 +78,8 @@ async def build_handlers(settings: Settings, ctx: dict[str, Any]) -> dict[str, S
             storage=ctx["storage"],
             providers=[RegexExtractor(), KeyValueExtractor(), TableExtractor()],
         ),
+        ValidateStep(),
+        ReviewStep(),
     ]
     return {step.key: step for step in steps}
 

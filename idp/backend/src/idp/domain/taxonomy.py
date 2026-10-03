@@ -70,6 +70,9 @@ class ExtractionHints(_Strict):
     patterns: list[str] = Field(default_factory=list, max_length=20)
     # Where the value sits relative to a label: same line to the right, or below.
     position: Literal["right", "below", "any"] = "any"
+    # When no label is found: "first_line" proposes the first line of the first
+    # page (issuer names on letterheads) at deliberately low confidence.
+    fallback: Literal["none", "first_line"] = "none"
 
     @field_validator("patterns")
     @classmethod
@@ -128,8 +131,28 @@ class SchemaDefinition(_Strict):
         names = [f.name for f in self.fields]
         if len(names) != len(set(names)):
             raise ValueError("field names must be unique")
-        if len(self.flatten()) > MAX_FIELDS:
+        flat = self.flatten()
+        if len(flat) > MAX_FIELDS:
             raise ValueError(f"a schema may define at most {MAX_FIELDS} fields")
+        # Rules are checked when the schema is saved, not discovered broken at runtime.
+        from idp.domain.validation import check_rule_spec  # noqa: PLC0415 — breaks import cycle
+
+        for path, definition in flat:
+            for rule in definition.validation_rules:
+                try:
+                    check_rule_spec(rule, cross_field=False)
+                except ValueError as exc:
+                    raise ValueError(f"{path}: {exc}") from exc
+        known = {path for path, _ in flat}
+        for i, rule in enumerate(self.rules):
+            check_rule_spec(rule, cross_field=True)
+            for key in ("target", "left", "right"):
+                ref = rule.params.get(key)
+                if isinstance(ref, str) and ref not in known:
+                    raise ValueError(f"rules[{i}] refers to unknown field '{ref}'")
+            for ref in rule.params.get("terms", []):
+                if ref not in known:
+                    raise ValueError(f"rules[{i}] refers to unknown field '{ref}'")
         return self
 
     def flatten(self) -> list[tuple[str, FieldDefinition]]:

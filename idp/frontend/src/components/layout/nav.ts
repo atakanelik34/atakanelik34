@@ -38,8 +38,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'Dashboard', icon: LayoutDashboard, to: '/' },
       { label: 'Documents', icon: FileText, to: '/documents', permission: 'documents:read' },
       { label: 'Inbox', icon: Inbox, plannedPhase: 10 },
-      { label: 'Processing', icon: Activity, plannedPhase: 3 },
-      { label: 'Review queue', icon: ClipboardCheck, plannedPhase: 7 },
+      { label: 'Processing', icon: Activity, plannedPhase: 8 },
+      { label: 'Review queue', icon: ClipboardCheck, to: '/reviews', permission: 'reviews:read' },
     ],
   },
   {
@@ -55,7 +55,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: 'Govern',
     items: [
       { label: 'Users', icon: Users, to: '/users', permission: 'users:read' },
-      { label: 'Audit log', icon: ScrollText, plannedPhase: 7 },
+      { label: 'Audit log', icon: ScrollText, to: '/audit', permission: 'audit:read' },
       { label: 'Settings', icon: Settings, to: '/settings' },
     ],
   },

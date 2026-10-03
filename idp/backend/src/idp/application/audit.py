@@ -40,6 +40,16 @@ class AuditAction(StrEnum):
     DOCUMENT_TYPE_UPDATED = "document_type.updated"
     SCHEMA_DRAFT_SAVED = "schema.draft_saved"
     SCHEMA_PUBLISHED = "schema.published"
+    REVIEW_REQUESTED = "review.requested"
+    REVIEW_CLAIMED = "review.claimed"
+    REVIEW_FIELD_ACCEPTED = "review.field_accepted"
+    REVIEW_FIELD_CORRECTED = "review.field_corrected"
+    REVIEW_FIELD_REJECTED = "review.field_rejected"
+    REVIEW_ROW_ADDED = "review.row_added"
+    REVIEW_ROW_DELETED = "review.row_deleted"
+    REVIEW_APPROVED = "review.approved"
+    REVIEW_REJECTED = "review.rejected"
+    REVIEW_SENT_BACK = "review.sent_back"
 
 
 class AuditEntity(StrEnum):
@@ -48,6 +58,8 @@ class AuditEntity(StrEnum):
     DOCUMENT = "document"
     JOB = "job"
     DOCUMENT_TYPE = "document_type"
+    REVIEW_TASK = "review_task"
+    EXTRACTED_FIELD = "extracted_field"
 
 
 def record_audit(

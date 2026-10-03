@@ -288,6 +288,10 @@ class DocumentService:
                 f"Document in status {document.status.value} cannot be reprocessed",
                 details={"status": document.status.value},
             )
+        if document.status is DocumentStatus.WAITING_FOR_HUMAN:
+            raise ConflictError(
+                "Document is waiting for review; approve, reject or send back its review task"
+            )
         if await self._has_active_job(document):
             raise ConflictError("Document already has an active processing job")
 

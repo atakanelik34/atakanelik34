@@ -150,9 +150,7 @@ async def test_duplicate_delivery_is_a_no_op(
     assert await runner.run(job_id) is RunOutcome.SUCCEEDED
     assert await runner.run(job_id) is RunOutcome.NOT_CLAIMED
     assert await runner.run(uuid.uuid4()) is RunOutcome.NOT_CLAIMED
-    assert len(await _steps(container, job_id)) == len(
-        workflows.DEFAULT_WORKFLOW.steps
-    )  # each step once
+    assert len(await _steps(container, job_id)) == 2  # probe + digitize (ingest v2), once each
     assert (await _job(container, job_id)).attempts == 1
 
 
@@ -334,7 +332,7 @@ async def test_completed_steps_are_checkpointed_across_attempts(
     make_runner: RunnerFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    default = workflows.DEFAULT_WORKFLOW
+    default = workflows.get_workflow("ingest", 2)
     two_steps = WorkflowDefinition(
         key=default.key, version=default.version, steps=("first", "second")
     )
@@ -503,3 +501,9 @@ async def test_end_to_end_through_redis_and_arq_worker(
     assert (await _job(container, job_id)).status is JobStatus.SUCCEEDED
     # Re-dispatching the same job state is de-duplicated by message id or a no-op claim.
     await real_scheduler.dispatch(job_id, token=0)
+
+
+@pytest.fixture(autouse=True)
+def _workflow(pin_workflow) -> None:  # type: ignore[no-untyped-def]
+    # These tests exercise stages before validation/review (workflow ingest v2).
+    pin_workflow(2)

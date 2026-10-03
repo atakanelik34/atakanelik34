@@ -33,11 +33,17 @@ INGEST_V4 = WorkflowDefinition(
     key="ingest", version=4, steps=("probe", "digitize", "classify", "extract")
 )
 
-DEFAULT_WORKFLOW = INGEST_V4
+INGEST_V5 = WorkflowDefinition(
+    key="ingest",
+    version=5,
+    steps=("probe", "digitize", "classify", "extract", "validate", "review"),
+)
+
+DEFAULT_WORKFLOW = INGEST_V5
 
 # Old versions stay registered: jobs pinned to them must still run unchanged.
 _REGISTRY: dict[tuple[str, int], WorkflowDefinition] = {
-    (w.key, w.version): w for w in (INGEST_V1, INGEST_V2, INGEST_V3, INGEST_V4)
+    (w.key, w.version): w for w in (INGEST_V1, INGEST_V2, INGEST_V3, INGEST_V4, INGEST_V5)
 }
 
 
@@ -46,6 +52,19 @@ def get_workflow(key: str, version: int) -> WorkflowDefinition:
         return _REGISTRY[(key, version)]
     except KeyError as exc:
         raise ConfigurationError(f"Unknown workflow {key} v{version}") from exc
+
+
+class AwaitingHumanReview(Exception):  # noqa: N818 — a control-flow signal, not an error
+    """Raised by a step to pause the job for a human decision.
+
+    The runner persists the step's pending writes (e.g. the review task), marks
+    the step WAITING, the job WAITING_FOR_REVIEW and the document
+    WAITING_FOR_HUMAN — all fenced, in one transaction.
+    """
+
+    def __init__(self, reasons: list[dict[str, Any]]) -> None:
+        super().__init__("human review required")
+        self.reasons = reasons
 
 
 @dataclass(slots=True)

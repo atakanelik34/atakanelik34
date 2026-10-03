@@ -64,6 +64,8 @@ ignore = [
 "tests/**" = ["S101", "S105", "S106", "PLR0913", "PT018", "E501", "PLC0415"]
 "migrations/**" = ["E501"]
 "src/idp/domain/templates.py" = ["E501"]
+# FastAPI endpoints declare query parameters as function arguments.
+"src/idp/api/routes/**" = ["PLR0917"]
 
 [tool.mypy]
 python_version = "3.11"

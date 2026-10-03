@@ -219,3 +219,11 @@ INVOICE_ROWS: list[list[tuple[float, str]]] = [
 
 def invoice_pdf(rows: list[list[tuple[float, str]]] | None = None) -> bytes:
     return make_text_pdf(rows or INVOICE_ROWS)
+
+
+def clean_invoice_pdf(total: str = "1,249.50 EUR") -> bytes:
+    """An invoice every rule accepts: labelled supplier, consistent totals, valid IBAN."""
+    rows = [list(r) for r in INVOICE_ROWS]
+    rows[0] = [(72, "Supplier: ACME Industrial Supplies GmbH")]
+    rows[15] = [(370, "Total due"), (480, total)]
+    return make_text_pdf(rows)

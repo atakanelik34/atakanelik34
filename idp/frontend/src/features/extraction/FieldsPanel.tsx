@@ -13,13 +13,13 @@ function Row({
   label,
   selected,
   onSelect,
-  actions,
+  renderActions,
 }: {
   field: FieldValue
   label: string
   selected: boolean
   onSelect: (field: FieldValue) => void
-  actions?: (field: FieldValue) => ReactNode
+  renderActions?: (field: FieldValue) => ReactNode
 }) {
   return (
     <li
@@ -45,7 +45,7 @@ function Row({
       </button>
       <div className="flex shrink-0 items-center gap-1.5 pt-1">
         <ConfidenceBadge field={field} />
-        {actions?.(field)}
+        {renderActions?.(field)}
       </div>
     </li>
   )
@@ -55,12 +55,12 @@ export function FieldsPanel({
   part,
   selectedId,
   onSelect,
-  actions,
+  renderActions,
 }: {
   part: PartResult
   selectedId: string | null
   onSelect: (field: FieldValue) => void
-  actions?: (field: FieldValue) => ReactNode
+  renderActions?: (field: FieldValue) => ReactNode
 }) {
   const scalars = Object.values(part.fields)
   return (
@@ -73,7 +73,7 @@ export function FieldsPanel({
             label={field.path.replaceAll('_', ' ')}
             selected={selectedId === field.id}
             onSelect={onSelect}
-            actions={actions}
+            renderActions={renderActions}
           />
         ))}
       </ul>

@@ -8,6 +8,9 @@ import { DocumentDetailPage } from '@/features/documents/DocumentDetailPage'
 import { DocumentsPage } from '@/features/documents/DocumentsPage'
 import { SettingsPage } from '@/features/settings/SettingsPage'
 import { UsersPage } from '@/features/users/UsersPage'
+import { AuditLogPage } from '@/features/audit/AuditLogPage'
+import { ReviewQueuePage } from '@/features/review/ReviewQueuePage'
+import { ReviewWorkspacePage } from '@/features/review/ReviewWorkspacePage'
 import { DocumentTypeDetailPage } from '@/features/taxonomy/DocumentTypeDetailPage'
 import { DocumentTypesPage } from '@/features/taxonomy/DocumentTypesPage'
 
@@ -26,6 +29,9 @@ export const routes = [
       { path: 'documents/:id', element: <DocumentDetailPage /> },
       { path: 'document-types', element: <DocumentTypesPage /> },
       { path: 'document-types/:id', element: <DocumentTypeDetailPage /> },
+      { path: 'reviews', element: <ReviewQueuePage /> },
+      { path: 'reviews/:id', element: <ReviewWorkspacePage /> },
+      { path: 'audit', element: <AuditLogPage /> },
       { path: 'users', element: <UsersPage /> },
       { path: 'settings', element: <SettingsPage /> },
     ],

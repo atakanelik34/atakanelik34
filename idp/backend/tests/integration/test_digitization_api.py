@@ -52,3 +52,9 @@ async def test_digitized_pages_expose_geometry_and_images(
 
     missing = await client.get(f"/api/v1/documents/{doc_id}/pages/9/layout", headers=owner)
     assert missing.status_code == 404
+
+
+@pytest.fixture(autouse=True)
+def _workflow(pin_workflow) -> None:  # type: ignore[no-untyped-def]
+    # These tests exercise stages before validation/review (workflow ingest v2).
+    pin_workflow(2)

@@ -28,6 +28,7 @@ from idp.infrastructure.db.models import (
     ProcessingJob,
     ProcessingStep,
     SchemaVersion,
+    ValidationResult,
 )
 
 
@@ -134,6 +135,27 @@ class ResultService:
                 else:
                     r.fields[f.path] = view
             r.tables = {k: list(v.values()) for k, v in rows_by_array.items()}
+        validations = (
+            await self._session.scalars(
+                select(ValidationResult)
+                .where(ValidationResult.job_id == job_id)
+                .order_by(ValidationResult.rule_id)
+            )
+        ).all()
+        by_part_validation: dict[uuid.UUID, list[dict[str, Any]]] = defaultdict(list)
+        for v in validations:
+            by_part_validation[v.part_id].append(
+                {
+                    "rule": v.rule_id,
+                    "rule_type": v.rule_type,
+                    "outcome": v.outcome,
+                    "fields": v.field_paths,
+                    "message": v.message,
+                    "details": v.details,
+                }
+            )
+        for r in results:
+            r.sections["validation"] = by_part_validation.get(r.part.id, [])
         return results
 
     async def processing_result(

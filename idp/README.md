@@ -25,7 +25,9 @@ per document by a routing engine that respects a local-first data policy.
 | 3 | Digitization: native text + geometry, page rendering, OCR port (Tesseract bundled, labelled mock), document viewer | ✅ |
 | 4 | Taxonomy: versioned schemas, templates, rule classifier, page-level splitting, document-type editor | ✅ |
 | 5 | Extraction: regex, key/value and table providers, normalisation, confidence, provenance, result contract, extraction panel with source highlighting | ✅ |
-| 6–12 | Validation → … → production hardening | in progress ([roadmap](ARCHITECTURE.md#16-phased-implementation-plan)) |
+| 6 | Validation: rule registry (field + cross-field), required/confidence checks, stored outcomes | ✅ |
+| 7 | Human review: review queue, workspace (viewer + fields + validation + evidence), corrections, approve/reject/send-back, audit log UI | ✅ |
+| 8–12 | Routing → LLM → enrichment → actions → production hardening | in progress ([roadmap](ARCHITECTURE.md#16-phased-implementation-plan)) |
 
 The UI shows planned sections in the navigation as disabled with their phase
 number; nothing in the product is simulated.

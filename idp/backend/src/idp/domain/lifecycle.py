@@ -95,10 +95,19 @@ class JobStatus(StrEnum):
     FAILED = "FAILED"
     # Retryable error, but attempts exhausted: needs operator attention / replay.
     DEAD_LETTERED = "DEAD_LETTERED"
+    # Paused at a review step; resumes (same job) when a human approves.
+    WAITING_FOR_REVIEW = "WAITING_FOR_REVIEW"
+    # Stopped by a human decision (rejected, or sent back for a new run).
+    CANCELLED = "CANCELLED"
 
 
 ACTIVE_JOB_STATUSES: frozenset[JobStatus] = frozenset(
-    {JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.RETRY_SCHEDULED}
+    {
+        JobStatus.QUEUED,
+        JobStatus.RUNNING,
+        JobStatus.RETRY_SCHEDULED,
+        JobStatus.WAITING_FOR_REVIEW,
+    }
 )
 
 
@@ -106,3 +115,5 @@ class StepStatus(StrEnum):
     RUNNING = "RUNNING"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
+    WAITING = "WAITING"  # waiting for a human (review step)
+    CANCELLED = "CANCELLED"

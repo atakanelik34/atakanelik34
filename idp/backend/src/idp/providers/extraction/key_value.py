@@ -170,8 +170,8 @@ class KeyValueExtractor:
         fields: list[tuple[str, FieldDefinition]],
         found: list[FieldCandidate],
     ) -> list[FieldCandidate]:
-        """For string fields hinted `below` with no label found (typically the issuer
-        name at the top of page 1): propose the first line, at low confidence."""
+        """For string fields with `fallback: first_line` and no label found (typically
+        the issuer name at the top of page 1): propose the first line, at low confidence."""
         if not layout.lines:
             return []
         have = {c.path for c in found}
@@ -180,7 +180,7 @@ class KeyValueExtractor:
         for path, field in fields:
             if path in have or field.type is not FieldType.STRING:
                 continue
-            if field.extraction_hints.position != "below":
+            if field.extraction_hints.fallback != "first_line":
                 continue
             out.append(
                 candidate(
