@@ -1,0 +1,28 @@
+# Only needed when building behind a TLS-intercepting proxy:
+#   EXTRA_CA_CERT=/path/to/corporate-ca.pem \
+#   docker compose -f docker-compose.yml -f docker-compose.proxy-ca.example.yml up --build
+services:
+  migrate:
+    build:
+      context: ./backend
+      secrets: [extra_ca]
+  bootstrap:
+    build:
+      context: ./backend
+      secrets: [extra_ca]
+  api:
+    build:
+      context: ./backend
+      secrets: [extra_ca]
+  worker:
+    build:
+      context: ./backend
+      secrets: [extra_ca]
+  frontend:
+    build:
+      context: ./frontend
+      secrets: [extra_ca]
+
+secrets:
+  extra_ca:
+    file: ${EXTRA_CA_CERT:?set EXTRA_CA_CERT to your proxy CA bundle}

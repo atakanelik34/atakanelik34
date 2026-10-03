@@ -1,0 +1,152 @@
+# Development stack:  cp .env.example .env  (or `make env`)  &&  docker compose up --build
+# UI: http://localhost:8080   API docs: http://localhost:8000/api/v1/docs   MinIO console: http://localhost:9001
+name: idp
+
+x-backend: &backend
+  build: ./backend
+  image: idp-backend:dev
+  env_file: .env
+  environment: &backend-env
+    DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-idp}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-idp}
+    REDIS_URL: redis://redis:6379/0
+    STORAGE_BACKEND: s3
+    S3_ENDPOINT_URL: http://minio:9000
+    S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-http://localhost:9000}
+    S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
+    S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+    STORAGE_AUTO_CREATE_BUCKET: "true"
+    JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-idp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-idp}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # AOF keeps queued job ids across restarts; Postgres remains the source of truth.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  minio:
+    # The upstream minio/minio image is no longer published on Docker Hub; this is
+    # MinIO packaged by Bitnami (legacy, pinned). Override with MINIO_IMAGE.
+    image: ${MINIO_IMAGE:-bitnamilegacy/minio:2025.7.23}
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+    volumes:
+      - minio-data:/bitnami/minio/data
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    <<: *backend
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  bootstrap:
+    <<: *backend
+    # Creates the first tenant + owner when IDP_BOOTSTRAP_PASSWORD is set; idempotent.
+    command:
+      - sh
+      - -c
+      - >
+        if [ -z "$$IDP_BOOTSTRAP_PASSWORD" ]; then echo "IDP_BOOTSTRAP_PASSWORD not set; skipping bootstrap"; exit 0; fi;
+        exec idp bootstrap --if-missing
+        --tenant-slug "$${IDP_BOOTSTRAP_TENANT_SLUG:-demo}"
+        --tenant-name "$${IDP_BOOTSTRAP_TENANT_NAME:-Demo Tenant}"
+        --email "$${IDP_BOOTSTRAP_EMAIL:-admin@demo.local}"
+        --name "$${IDP_BOOTSTRAP_NAME:-Platform Admin}"
+    restart: "no"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  api:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      # Trust X-Forwarded-For only from the frontend proxy on the compose network.
+      FORWARDED_ALLOW_IPS: "*"
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  worker:
+    <<: *backend
+    command: ["arq", "idp.workers.main.WorkerSettings"]
+    healthcheck:
+      disable: true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    image: idp-frontend:dev
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Optional local LLM runtime (used from phase 9):  docker compose --profile llm up
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["llm"]
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  ollama-data:

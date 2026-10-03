@@ -1,0 +1,723 @@
+# IDP Platform — Architecture
+
+> Status: **Phase 0 (architecture) complete, Phase 1 (foundation) implemented.**
+> This document is the source of truth for structure and contracts. When code
+> and this document disagree, fix one of them in the same change.
+
+---
+
+## 0. Guiding decisions
+
+| # | Decision | Why |
+|---|----------|-----|
+| D1 | **Deterministic where possible, AI-assisted where useful, human-controlled where necessary.** | Validation, permissions, money math, DB writes and external actions must be reproducible and auditable. AI is used for classification, routing hints, semantic extraction and ambiguous interpretation only. |
+| D2 | **Every processing capability sits behind a port (Protocol) with adapters.** | No single OCR engine, LLM, storage, or extraction technique is load-bearing. The orchestrator only knows ports. |
+| D3 | **Postgres is the system of record; the queue only carries IDs.** | Jobs survive Redis loss, workers are idempotent (they reload state from Postgres), and every transition is auditable. |
+| D4 | **Binary documents live in object storage, never in Postgres.** | Size, cost, backups, signed URLs. |
+| D5 | **Local-first data policy, enforced in code.** | A `ProcessingPolicy` decides whether any byte may leave the environment. Providers declare their locality; the router *and* the provider gateway both enforce it (defense in depth). |
+| D6 | **Configuration is versioned and immutable once used.** | Schemas, workflows, routing policies and provider configs are versioned; every run pins the versions it used, so historical runs stay reproducible. |
+| D7 | **Human review is a lifecycle state, not an error.** | `WAITING_FOR_HUMAN` is a normal path; intervention is tracked as a metric, not a failure. |
+| D8 | **No fake AI.** | Unconfigured providers report `not_configured`. Development uses explicitly named `Mock*` providers that are visibly labelled as mocks in API and UI. |
+| D9 | **Modular monolith first, service boundaries later.** | One backend codebase with strict layering, two process types (API, worker). Boundaries are drawn so modules can be extracted if throughput ever demands it. |
+
+### Reference image
+
+`docs/reference/ocr.jpg` shows the conceptual "Agentic OCR" flow:
+channels (Portal / Email / SFTP-API) → Orchestrator/Manager agent → Extraction
+agent → {Text, Layout, OCR} paths → Validation agent → Enrichment agent
+(QuickBooks / Dynamics / SAP) → System Action agent.
+
+We keep that shape and extend it into a product architecture. Differences:
+
+* Ingestion is its own stage (security checks, dedupe, normalisation) before
+  the orchestrator ever sees a document.
+* Digitization, classification and **splitting** are explicit stages before
+  extraction (the image folds them into "Extraction Agent").
+* The Text/Layout/OCR "paths" become a **routing engine** over pluggable
+  `DigitizationProvider`s and `ExtractionProvider`s with a recorded route trace.
+* **Human review** is a first-class stage (absent from the image).
+* The "agents" are bounded components with explicit ports, not free-roaming
+  LLM loops. Only the System Action stage touches external systems, and only
+  through configured, authorised actions.
+* Audit/analytics is a cross-cutting sink for every stage.
+
+---
+
+## 1. System architecture
+
+```mermaid
+flowchart TB
+    subgraph Sources
+      W[Web upload] --- A[REST API] --- E[Email] --- S[SFTP] --- F[Folder] --- O[Object storage] --- H[Webhooks]
+    end
+    Sources --> ING[Ingestion<br/>validate · scan · checksum · dedupe · store]
+    ING -->|Document + ProcessingJob rows| PG[(PostgreSQL)]
+    ING -->|bytes| OBJ[(Object storage)]
+    ING -->|job id| Q[[Redis queue]]
+    Q --> ORCH[Orchestrator<br/>workflow engine / state machine]
+    ORCH --> DIG[Digitization]
+    DIG --> CLS[Classification]
+    CLS --> SPL[Splitting]
+    SPL --> RT[Extraction router]
+    RT --> EXP[Extraction providers<br/>native · regex · rules · layout · OCR · local LLM · cloud LLM]
+    EXP --> VAL[Validation rule engine]
+    VAL -->|requires human| HR[Human review]
+    HR --> VAL
+    VAL --> ENR[Enrichment providers]
+    ENR --> ACT[Action executor<br/>allow-listed actions only]
+    ACT --> EXT[(ERP / SAP / webhooks / email)]
+    ORCH -. events .-> BUS[[Event bus]]
+    BUS -.-> AUD[(Audit log)] & MET[Metrics / analytics] & UI[UI live status]
+```
+
+### Runtime processes
+
+```
+browser ──► frontend (static SPA, nginx) ──► api (FastAPI) ──► PostgreSQL
+                                               │    │
+                                               │    └──► object storage (MinIO / S3 / local fs)
+                                               └──► Redis ──► worker(s) (arq) ──► pipeline
+```
+
+* **api** — HTTP only. Never runs pipeline stages inline. Validates, authorises,
+  persists, enqueues.
+* **worker** — horizontally scalable. Pulls job IDs, loads state from Postgres,
+  executes workflow steps, persists results, emits events. Concurrency is set
+  per worker (`WORKER_MAX_JOBS`).
+* **frontend** — static SPA. Holds no secrets; talks only to `/api`.
+
+### Layering (backend)
+
+```
+api            → FastAPI routers, request/response DTOs, auth dependencies
+application    → use cases / services; orchestrates domain + ports; owns transactions
+domain         → entities, value objects, state machine, rules, errors. Pure Python, no I/O
+infrastructure → SQLAlchemy, Redis, S3, JWT, hashing, logging — adapters for ports
+providers      → processing adapters (digitization, extraction, LLM, enrichment, actions)
+workers        → queue entrypoints that call application services
+```
+
+Allowed import direction: `api → application → domain`, `infrastructure → domain`,
+`application → infrastructure`. `domain` imports nothing from the other layers.
+A port (Protocol) is introduced where substitution is real — storage, queue,
+every processing provider — not around every repository: application services
+use the SQLAlchemy repositories and security helpers directly. This keeps the
+code honest about what is pluggable.
+Wiring (choosing adapters) happens only in composition roots: `idp.main`,
+`idp.workers.main`, and `idp.api.deps`.
+
+---
+
+## 2. Directory structure
+
+```
+idp/
+├── ARCHITECTURE.md · CLAUDE.md · README.md
+├── docker-compose.yml          # postgres, redis, minio, migrate, api, worker, frontend (+ollama profile)
+├── .env.example
+├── Makefile
+├── docs/reference/ocr.jpg
+├── backend/
+│   ├── pyproject.toml          # deps, ruff, mypy, pytest config
+│   ├── Dockerfile
+│   ├── alembic.ini
+│   ├── migrations/             # Alembic env + versioned migrations (the only way schema changes)
+│   ├── src/idp/
+│   │   ├── main.py             # API composition root (app factory)
+│   │   ├── config.py           # typed settings from env (development/test/production)
+│   │   ├── cli.py              # operational commands (bootstrap tenant/admin)
+│   │   ├── api/
+│   │   │   ├── deps.py         # DI: sessions, current principal, permission guards
+│   │   │   ├── errors.py       # error-category → HTTP mapping, problem+json
+│   │   │   ├── middleware.py   # correlation id, access log, security headers
+│   │   │   ├── schemas/        # API DTOs (never ORM objects)
+│   │   │   └── routes/         # health, auth, users, tenants, … (one module per resource)
+│   │   ├── application/        # services: auth, users, audit, health, (ingestion, review, …)
+│   │   ├── domain/             # errors, identity/RBAC, lifecycle state machine, (taxonomy, fields, rules, …)
+│   │   ├── infrastructure/
+│   │   │   ├── db/             # engine/session, ORM models, repositories
+│   │   │   ├── storage/        # ObjectStorageProvider port + s3/local adapters
+│   │   │   ├── queue/          # job queue port + arq/redis adapter
+│   │   │   ├── security/       # password hashing, JWT
+│   │   │   └── logging.py      # structured JSON logs, redaction
+│   │   ├── providers/          # (phase 3+) digitization, ocr, classification, extraction, llm, enrichment, actions
+│   │   └── workers/            # arq WorkerSettings + task entrypoints
+│   └── tests/                  # unit/ (no I/O) · integration/ (postgres, redis, storage) · api/
+└── frontend/
+    ├── package.json · vite.config.ts · tsconfig*.json · eslint.config.js
+    ├── Dockerfile · nginx.conf
+    └── src/
+        ├── app/                # router, providers (query client, auth)
+        ├── components/ui/      # shadcn-style primitives (button, card, badge, input, …)
+        ├── components/layout/  # app shell, sidebar, top bar
+        ├── features/           # one folder per product area (auth, dashboard, system, documents, review, …)
+        └── lib/                # api client, formatting, utils
+```
+
+---
+
+## 3. Domain model
+
+### 3.1 Identity & tenancy
+
+```
+Tenant 1─* Project
+Tenant 1─* User            (User.role ∈ {owner, admin, operator, reviewer, viewer})
+Tenant 1─* ApiKey          (phase 2; machine ingestion)
+* Every tenant-owned row has tenant_id (FK, indexed). Every query is tenant-scoped
+  by the repository layer; the API never accepts tenant_id from the client body.
+```
+
+### 3.2 Documents
+
+```
+Document                     the physical file as received
+  id, tenant_id, project_id, source(channel), source_ref,
+  original_filename (display only, never used as a path),
+  detected_mime_type, declared_mime_type, size_bytes, sha256,
+  storage_key (opaque), status (DocumentStatus), received_at,
+  metadata (jsonb), deleted_at
+  UNIQUE (tenant_id, project_id, sha256) WHERE deleted_at IS NULL   → duplicate guard
+
+DocumentPage                 one row per page after digitization
+  document_id, page_number, width, height, unit, rotation,
+  text_layer: native|ocr|hybrid|none, text_quality (0..1),
+  language, ocr_confidence, layout_ref (storage key of the geometry JSON)
+
+DocumentPart                 a logical document inside a file (splitting result)
+  document_id, page_start, page_end, document_type_id, schema_version_id,
+  classification_confidence, classifier, status
+  (single-document file ⇒ exactly one part spanning all pages)
+```
+
+Geometry (words → lines → blocks with bounding boxes, per page) is large and
+read-mostly; it is stored as a JSON blob in object storage and referenced from
+`document_pages.layout_ref`. Postgres keeps the searchable summary.
+
+Bounding boxes are **normalised** `[x0, y0, x1, y1]` in `0..1` relative to the
+page, origin top-left, so the viewer can draw them at any zoom/rotation.
+
+### 3.3 Taxonomy & schemas (configurable, versioned)
+
+```
+DocumentType      tenant_id, project_id?, key ("invoice"), name, description, is_active
+SchemaVersion     document_type_id, version (int), status: draft|published|retired,
+                  definition (jsonb, the FieldDefinition tree), published_at
+                  — published versions are immutable; edits create a new draft.
+FieldDefinition   (inside SchemaVersion.definition)
+  { name, type, required, description, aliases[], extraction_hints[],
+    validation_rules[], confidence_threshold, normalization_rules[],
+    children[] (for object), item (for array) }
+FieldType         string|integer|decimal|currency|date|datetime|boolean|email|phone|
+                  address|iban|tax_number|array|object
+```
+
+`invoice.lines[]` is `array` whose `item` is an `object` field with
+`description, quantity, unit_price, tax_rate, total`.
+
+A `fields` table mirrors the published definition (flattened paths like
+`lines[].total`) for indexing/analytics; the JSON definition is canonical.
+
+### 3.4 Processing
+
+```
+ProcessingJob     document_id, workflow_version_id, priority, status, attempts,
+                  max_attempts, idempotency_key UNIQUE, next_attempt_at,
+                  last_error_category, last_error_message, correlation_id
+WorkflowRun       job_id, workflow_version_id, status, started_at, finished_at
+ProcessingStep    run_id, step_key (digitize|classify|split|extract|validate|enrich|review|action),
+                  status, attempt, provider, model, provider_version,
+                  started_at, duration_ms, route_trace (jsonb), metrics (jsonb),
+                  error_category, error_message
+ExtractionResult  part_id, run_id, schema_version_id, provider, model, route, cost_estimate
+ExtractedField    result_id, path ("lines[2].total"), value (jsonb), normalized_value,
+                  confidence, provenance (jsonb), status: extracted|corrected|rejected
+ValidationResult  part_id, run_id, rule_id, field_path?, outcome: PASS|WARNING|FAIL|REQUIRES_HUMAN, message
+ReviewTask        part_id, reason[], status: open|in_progress|approved|rejected|sent_back,
+                  assignee_id, due_at
+ReviewAction      task_id, actor_id, action: accept|edit|reject|approve|send_back,
+                  field_path?, original_value, corrected_value, reason, at
+                  — doubles as the feedback dataset for evaluation/fine-tuning
+EnrichmentResult  part_id, run_id, provider, lookup_key, result (jsonb), matched, confidence
+ActionRun         part_id, run_id, action_key, status, idempotency_key UNIQUE, request_ref,
+                  response_ref, error
+```
+
+### 3.5 Provenance (attached to every `ExtractedField`)
+
+```json
+{
+  "method": "ocr+llm",
+  "provider": "local-llm", "model": "qwen2.5:7b", "provider_version": "1.0.0",
+  "page": 1,
+  "bbox": [0.62, 0.08, 0.91, 0.11],
+  "source_text": "INV-2026-00123",
+  "extracted_at": "2026-10-03T12:00:00Z",
+  "pipeline_version": "2026.10.0",
+  "schema_version_id": "…", "route": "LAYOUT_EXTRACTION"
+}
+```
+
+### 3.6 Configuration & governance
+
+```
+WorkflowDefinition / WorkflowVersion   versioned step graph (jsonb), immutable once published
+ProviderConfig / ProviderConfigVersion provider key, kind, locality, settings (secrets by env reference only)
+ModelRegistry                          provider, model id, version, cost per 1k tokens/page, locality
+ProcessingPolicy                       per tenant (+ project override):
+                                       data_residency: LOCAL_ONLY|HYBRID|CLOUD_ALLOWED,
+                                       allow_cloud_llm, allow_cloud_ocr, preferred_extraction
+AuditLog                               tenant_id, actor_type, actor_id, action, entity_type, entity_id,
+                                       before (jsonb), after (jsonb), correlation_id, ip, at
+```
+
+---
+
+## 4. Processing lifecycle (state machine)
+
+Implemented in `backend/src/idp/domain/lifecycle.py` (pure, unit tested).
+Every transition goes through `DocumentLifecycle.transition()`, which rejects
+illegal moves and returns a `StatusTransition` record that the application
+layer persists into `audit_logs`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> RECEIVED
+    RECEIVED --> QUEUED
+    QUEUED --> DIGITIZING
+    DIGITIZING --> DIGITIZED
+    DIGITIZED --> CLASSIFYING
+    CLASSIFYING --> CLASSIFIED
+    CLASSIFIED --> EXTRACTING
+    EXTRACTING --> EXTRACTED
+    EXTRACTED --> VALIDATING
+    VALIDATING --> WAITING_FOR_HUMAN : requires review
+    VALIDATING --> VALIDATED
+    WAITING_FOR_HUMAN --> VALIDATING : corrected / approved
+    WAITING_FOR_HUMAN --> QUEUED : sent back for reprocessing
+    WAITING_FOR_HUMAN --> REJECTED
+    VALIDATED --> ENRICHING
+    VALIDATED --> READY_FOR_ACTION : no enrichment configured
+    ENRICHING --> READY_FOR_ACTION
+    ENRICHING --> WAITING_FOR_HUMAN : enrichment mismatch
+    READY_FOR_ACTION --> EXECUTING_ACTIONS
+    READY_FOR_ACTION --> COMPLETED : no actions configured
+    EXECUTING_ACTIONS --> COMPLETED
+    note right of RETRYING
+      Any in-progress state (…ING) may go to RETRYING
+      or FAILED. RETRYING → QUEUED. FAILED → QUEUED
+      (manual reprocess). COMPLETED/REJECTED are terminal
+      except explicit reprocess (→ QUEUED, new run).
+    end note
+```
+
+* *Status* is coarse and user-facing; per-step detail lives in `processing_steps`.
+* For multi-part files the document status is the **least advanced** part status
+  (a file is `COMPLETED` only when every part is).
+* Human review is tracked via `review_tasks`; `human_intervention_rate` is a metric.
+
+---
+
+## 5. Provider interfaces (ports)
+
+All ports are `typing.Protocol`s in the module that owns them. Every provider
+exposes a `descriptor` so the router and UI can reason about it without
+instantiating vendor SDKs.
+
+```python
+class Locality(StrEnum): LOCAL = "local"; CLOUD = "cloud"
+
+@dataclass(frozen=True)
+class ProviderDescriptor:
+    key: str                  # "native-pdf", "tesseract", "ollama", "mock-ocr"
+    kind: ProviderKind        # digitization|ocr|classification|extraction|llm|enrichment|action
+    version: str
+    locality: Locality
+    is_mock: bool             # surfaced in API/UI
+    cost_model: CostModel     # per page / per 1k tokens / flat
+```
+
+### Storage (implemented, phase 1)
+
+```python
+class ObjectStorageProvider(Protocol):
+    async def put(self, key: str, data: BinaryIO, *, content_type: str, size: int) -> StoredObject
+    async def get(self, key: str) -> bytes
+    async def delete(self, key: str) -> None
+    async def exists(self, key: str) -> bool
+    async def signed_url(self, key: str, *, expires_in: int) -> str
+    async def check(self) -> ComponentHealth
+```
+
+Keys are generated server-side (`tenants/{tenant_id}/documents/{uuid}/original`),
+validated against a strict pattern, and never derived from filenames.
+
+### Ingestion
+
+```python
+class IngestionChannel(Protocol):            # email, sftp, folder, s3, webhook adapters
+    descriptor: ChannelDescriptor
+    async def poll(self) -> AsyncIterator[IncomingFile]   # push channels call IngestionService directly
+class MalwareScanner(Protocol):
+    async def scan(self, data: bytes) -> ScanVerdict      # ClamAV adapter; NoopScanner flagged as such
+```
+
+`IngestionService.ingest(IncomingFile, principal)` is the single path for every
+channel: size limit → magic-byte MIME sniff (declared type is advisory) →
+allow-list → malware scan → sha256 → duplicate check → store → `Document` +
+`ProcessingJob` → enqueue → `DocumentReceived` event.
+
+### Digitization
+
+```python
+class DigitizationProvider(Protocol):
+    descriptor: ProviderDescriptor
+    def supports(self, probe: DocumentProbe) -> bool        # probe = mime, page count, text-layer stats
+    async def digitize(self, req: DigitizationRequest) -> DigitizedDocument
+
+class OCREngine(Protocol):                                  # used by OCRProvider/HybridProvider
+    descriptor: ProviderDescriptor
+    async def recognize(self, image: PageImage, *, languages: list[str]) -> OCRPage
+```
+
+`DigitizedDocument` = pages → blocks → lines → words, each with normalised bbox,
+text, confidence; plus page text layer kind, text quality score, language.
+`DocumentProbe` decides native / scanned / hybrid / image / office / unsupported
+**before** any OCR runs (native text extraction first; OCR only pages that need it).
+
+### Classification & splitting
+
+```python
+class Classifier(Protocol):
+    descriptor: ProviderDescriptor
+    async def classify_pages(self, doc: DigitizedDocument, taxonomy: Taxonomy) -> list[PageClassification]
+class DocumentSplitter(Protocol):
+    def split(self, pages: list[PageClassification]) -> list[PartProposal]    # deterministic by default
+```
+
+### Extraction
+
+```python
+class ExtractionProvider(Protocol):
+    descriptor: ProviderDescriptor
+    def assess(self, ctx: ExtractionContext) -> Suitability   # can_handle, expected_confidence, est_cost, reasons
+    async def extract(self, req: ExtractionRequest) -> ExtractionOutput
+```
+
+`ExtractionOutput.fields: dict[path, FieldCandidate(value, confidence, provenance)]`.
+Every provider maps into this contract; nothing downstream knows which provider ran.
+
+### LLM
+
+```python
+class LLMProvider(Protocol):
+    descriptor: ProviderDescriptor                # locality is mandatory
+    async def generate(self, req: LLMRequest) -> LLMResponse
+    # LLMRequest: model, messages, temperature, max_tokens, json_schema?, timeout
+    # LLMResponse: text | parsed json, usage{input_tokens, output_tokens}, latency_ms, cost_estimate
+```
+
+Adapters: OpenAI-compatible (covers vLLM, LM Studio, llama.cpp server),
+Anthropic, Ollama. `LLMGateway` wraps providers with: policy check (locality vs
+`ProcessingPolicy` — **raises `PolicyViolation`, never silently falls back to
+cloud**), timeout, retry with backoff, circuit breaker, fallback chain, usage
+and cost accounting, JSON-schema validation of structured output (invalid ⇒
+retry once with the validation error, then fail the step).
+
+### Validation
+
+```python
+class ValidationRule(Protocol):                 # deterministic only — no LLM calls
+    rule_id: str
+    def evaluate(self, ctx: ValidationContext) -> list[RuleOutcome]
+```
+
+Built-ins: required, regex, min/max, date range, currency code, IBAN (mod-97),
+tax-number formats, numeric consistency (`total = subtotal + tax` with
+tolerance), cross-field (`invoice_date <= due_date`), confidence threshold,
+master-data existence (via a registered lookup tool). Decimal arithmetic only.
+
+### Enrichment & actions
+
+```python
+class EnrichmentProvider(Protocol):
+    descriptor: ProviderDescriptor
+    async def enrich(self, req: EnrichmentRequest) -> EnrichmentResult
+class ActionProvider(Protocol):
+    descriptor: ProviderDescriptor
+    async def execute(self, req: ActionRequest) -> ActionResult    # req carries idempotency_key
+```
+
+### Agent tools
+
+```python
+@dataclass(frozen=True)
+class ToolSpec:
+    name: str; description: str
+    input_schema: type[BaseModel]; output_schema: type[BaseModel]
+    required_permission: Permission
+    side_effects: bool          # tools with side effects are never callable by an LLM directly
+```
+
+`ToolRegistry.invoke(name, args, principal)` validates input, checks
+permission, audits, validates output. LLMs may *recommend* an action; only the
+deterministic workflow engine executes `ActionProvider`s that the workflow
+version explicitly lists.
+
+### Infrastructure ports
+
+```python
+class JobQueue(Protocol):
+    async def enqueue(self, job_id: UUID, *, priority: Priority, defer_seconds: int = 0) -> None
+class EventPublisher(Protocol):
+    async def publish(self, event: DomainEvent) -> None
+```
+
+---
+
+## 6. Routing engine
+
+Inputs (`DocumentSignals`): mime, page count, text-layer kind per page, text
+quality, table density, language, document type + classification confidence,
+`ProcessingPolicy`, schema field types, candidate providers' `assess()` results.
+
+Policy: an ordered list of declarative rules (versioned config), e.g.
+
+```yaml
+- when: { doc_type: invoice, text_quality: ">=0.9" }
+  route: NATIVE_TEXT
+  providers: [regex-invoice, rules-invoice]
+- when: { doc_type: invoice, text_layer: scanned }
+  route: OCR_THEN_EXTRACT
+  providers: [ocr-primary, ocr-secondary, layout-invoice]
+- when: { table_density: ">=0.3" }
+  route: LAYOUT_EXTRACTION
+- when: { doc_type: unknown }
+  route: CLASSIFY_FIRST
+fallback: [local-llm, cloud-llm]        # cloud-llm dropped automatically when policy forbids
+```
+
+Default preference (configurable, not hard-coded): native text → rules/regex →
+layout → specialised model → local LLM → cloud LLM. Low confidence on required
+fields triggers the next candidate; exhausting candidates ⇒ human review.
+
+Every decision produces a **route trace** stored in `processing_steps.route_trace`:
+
+```json
+{ "route": "LAYOUT_EXTRACTION",
+  "reasons": ["native text detected (quality 0.97)", "table density 0.42 ≥ 0.30",
+              "OCR not required", "layout-invoice expected confidence 0.91 ≥ 0.85"],
+  "rejected": [{"provider": "cloud-llm", "reason": "policy LOCAL_ONLY"}],
+  "policy_version": 3 }
+```
+
+Resilience for every external provider: timeout, bounded retries with
+exponential backoff + jitter, per-provider circuit breaker (state in Redis so all
+workers share it), fallback chain. A provider failure fails the *step attempt*,
+never the pipeline: primary → secondary → human review.
+
+---
+
+## 7. Workflow engine
+
+* A `WorkflowVersion` is a JSON step list (phase 1–11: linear with conditional
+  skips; visual editor later):
+
+```json
+{ "steps": [
+  {"key": "digitize"}, {"key": "classify"}, {"key": "split"},
+  {"key": "extract"}, {"key": "validate", "on_requires_human": "review"},
+  {"key": "enrich", "providers": ["vendor-lookup"]},
+  {"key": "action", "actions": ["erp.create_invoice"], "requires": "validated"}
+]}
+```
+
+* The engine executes one step per queue message: load run → check step not
+  already completed (idempotency) → run step → persist results + transition in
+  one transaction → enqueue the next step. A crash re-runs at most one step.
+* Retries: `attempts < max_attempts` ⇒ `RETRYING` with `next_attempt_at =
+  base * 2^attempt + jitter`; exhausted ⇒ `FAILED` + dead-letter record
+  (`processing_jobs.status = dead_lettered`) visible in the UI for manual replay.
+* Priority: separate queues (`high`, `default`, `bulk`); workers subscribe in order.
+
+---
+
+## 8. Events
+
+Envelope (no binaries, no document text):
+
+```json
+{ "event_id": "uuid", "type": "ExtractionCompleted", "occurred_at": "…",
+  "tenant_id": "…", "document_id": "…", "job_id": "…", "workflow_run_id": "…",
+  "correlation_id": "…", "payload": { "fields": 12, "low_confidence": 2 } }
+```
+
+Types: `DocumentReceived, DocumentDuplicateDetected, DocumentDigitized,
+DocumentClassified, DocumentSplit, ExtractionStarted, ExtractionCompleted,
+ValidationPassed, ValidationFailed, HumanReviewRequested, HumanReviewCompleted,
+EnrichmentCompleted, ActionExecuted, ActionFailed, DocumentCompleted,
+DocumentFailed, DocumentRejected`.
+
+Phase 2 ships an in-process publisher that writes to the audit log and a Redis
+Stream (`idp.events`); external webhooks subscribe to that stream in phase 11.
+A transactional outbox table is introduced if/when delivery guarantees to
+external consumers are required.
+
+---
+
+## 9. Processing result contract
+
+The stable API/internal shape every stage contributes to (`GET /documents/{id}/extraction`):
+
+```json
+{ "document_id": "…", "status": "WAITING_FOR_HUMAN",
+  "parts": [{
+    "part_id": "…", "pages": [1, 3],
+    "classification": {"document_type": "invoice", "confidence": 0.94, "classifier": "rules-v1"},
+    "schema_version": 2,
+    "fields": { "invoice_number": {"value": "INV-2026-00123", "confidence": 0.97, "provenance": {…}} },
+    "validation": [{"rule": "total_consistency", "outcome": "FAIL", "fields": ["total"], "message": "…"}],
+    "enrichment": [{"provider": "vendor-lookup", "matched": true}],
+    "actions": [] }],
+  "pages": [{"number": 1, "text_layer": "native", "text_quality": 0.98}],
+  "metrics": {"duration_ms": 4210, "llm_tokens": 0, "estimated_cost": 0.0},
+  "errors": [] }
+```
+
+---
+
+## 10. API boundaries
+
+REST, JSON, prefix `/api/v1`, OpenAPI at `/api/docs` (disabled in production
+unless `API_DOCS_ENABLED=true`). Errors use RFC 9457 `application/problem+json`
+with an `error_category` extension. Lists are cursor-paginated.
+
+| Area | Endpoints | Phase |
+|------|-----------|-------|
+| Health | `GET /health/live`, `GET /health/ready` | 1 ✅ |
+| Auth | `POST /auth/login`, `GET /auth/me` | 1 ✅ |
+| Users | `GET /users`, `POST /users` (admin) | 1 ✅ |
+| System | `GET /system/status` (component health incl. worker heartbeat) | 1 ✅ |
+| Documents | `POST /documents` (multipart), `GET /documents`, `GET /documents/{id}`, `GET /documents/{id}/download` (signed URL), `DELETE /documents/{id}` (soft) | 2 |
+| Processing | `POST /documents/{id}/process`, `GET /documents/{id}/status`, `GET /documents/{id}/timeline`, `GET /documents/{id}/extraction`, `POST /documents/{id}/validate` | 2–6 |
+| Pages | `GET /documents/{id}/pages`, `GET /documents/{id}/pages/{n}/layout`, `GET /documents/{id}/pages/{n}/image` | 3 |
+| Taxonomy | `GET/POST /document-types`, `GET/POST /document-types/{id}/schemas`, `POST /schemas/{id}/publish` | 4 |
+| Review | `GET /reviews`, `GET /reviews/{id}`, `POST /reviews/{id}/fields/{path}` (accept/edit/reject), `POST /reviews/{id}/approve`, `/reject`, `/send-back` | 7 |
+| Workflows | `GET/POST /workflows`, `POST /workflows/{id}/versions`, `POST /workflows/{id}/publish` | 8 |
+| Providers | `GET /providers`, `GET /providers/{key}`, `GET /models` | 8–9 |
+| Policy | `GET/PUT /settings/processing-policy` | 9 |
+| Connections | `GET/POST /connections` (enrichment/action targets; secrets referenced, never returned) | 10–11 |
+| Audit | `GET /audit-logs` | 1 (write) / 7 (read API) |
+| Metrics | `GET /metrics/overview`; Prometheus `/metrics` on an internal port | 12 |
+
+The API never exposes storage keys, filesystem paths, provider credentials, or
+stack traces.
+
+---
+
+## 11. Error taxonomy
+
+`domain/errors.py` defines `ErrorCategory`:
+
+| Category | HTTP | Retryable by worker | Example |
+|----------|------|--------------------|---------|
+| `SYSTEM_ERROR` | 500 | yes | DB connection lost |
+| `PROVIDER_ERROR` | 502 | yes (→ fallback) | OCR timeout |
+| `DOCUMENT_ERROR` | 422 | no | corrupted PDF, encrypted file |
+| `VALIDATION_ERROR` | 422 | no | bad request payload, schema violation |
+| `BUSINESS_ERROR` | 409 | no | duplicate document, illegal state transition |
+| `AUTHENTICATION_ERROR` | 401 | no | missing/expired token |
+| `AUTHORIZATION_ERROR` | 403 | no | role lacks permission, cross-tenant |
+| `NOT_FOUND` | 404 | no | (also returned for other tenants' resources) |
+| `CONFIGURATION_ERROR` | 500 / 503 | no | provider not configured, policy forbids all candidates |
+| `RATE_LIMITED` | 429 | — | too many login attempts |
+
+---
+
+## 12. Security
+
+* **AuthN**: email + password (argon2id) → short-lived JWT access token (HS256
+  with `JWT_SECRET` ≥ 32 bytes, refused at startup in production if weak).
+  API keys for machine ingestion (hashed at rest) in phase 2. OIDC/SAML is an
+  adapter behind the same `Principal` abstraction (later).
+* **AuthZ**: RBAC — roles map to permissions in `domain/identity.py`; routes
+  declare the permission they need (`require(Permission.DOCUMENTS_WRITE)`).
+  Roles nest strictly (`viewer < reviewer < operator < admin < owner`); only
+  owners hold `tenant:manage` (tenant-wide settings such as data residency), and
+  `ASSIGNABLE_ROLES` stops admins from minting owners.
+* **Identities**: emails are validated syntactically only, so internal
+  directory domains (`corp.local`) work; uniqueness is case-insensitive among
+  live users (partial unique index).
+* **Tenant isolation**: tenant id comes only from the authenticated principal;
+  repositories always filter by it; other tenants' objects return 404. Postgres
+  row-level security is a phase-12 hardening option.
+* **Uploads**: size limit enforced while streaming; magic-byte sniffing;
+  allow-list; malware-scan port; server-generated storage keys; no path built
+  from user input; originals are never executed or rendered server-side outside
+  sandboxed parsers.
+* **Downloads**: short-lived signed URLs only after an authorisation check.
+* **Secrets**: env vars only; `.env` git-ignored; `SecretStr` in settings so they
+  never print. Frontend holds no secrets.
+* **Logging**: structured JSON; a redaction processor drops keys like
+  `password`, `token`, `authorization`, `secret`, `api_key`, `content`, `text`.
+  Document contents are never logged by default.
+* **Transport/at rest**: TLS terminated at the ingress (out of scope for dev
+  compose); S3 SSE configurable (`STORAGE_SSE`); Postgres volume encryption is
+  an infrastructure concern documented in the README.
+* **Rate limiting**: login attempts limited per IP+email via Redis (phase 1);
+  global per-tenant API limits in phase 12.
+* Security headers on every response; CORS restricted to configured origins.
+
+---
+
+## 13. Observability
+
+* Every request gets/propagates `X-Correlation-ID`; it is bound into the log
+  context, stored on jobs/runs/audit rows and carried in queue messages and events.
+* Logs: JSON (prod) / console (dev), fields `correlation_id, tenant_id,
+  document_id, job_id, workflow_run_id, step, provider, model, duration_ms`.
+* Metrics (phase 12, Prometheus): step durations by step/provider, LLM latency,
+  tokens, estimated cost, retries, failures by category, queue depth.
+  Until then the same numbers are persisted on `processing_steps.metrics` and
+  surfaced in the dashboard.
+* Tracing: OpenTelemetry SDK wired in phase 12 (FastAPI, SQLAlchemy, httpx,
+  arq spans). No document content in span attributes.
+
+---
+
+## 14. Versioning & reproducibility
+
+* `SchemaVersion`, `WorkflowVersion`, `ProviderConfigVersion`, routing policy
+  versions, and model registry entries are immutable once referenced by a run.
+* Each `WorkflowRun` stores the exact versions + `pipeline_version` (app build).
+* Reprocessing creates a **new** run; older results remain queryable.
+
+---
+
+## 15. Evaluation framework (phase 8+)
+
+`evaluation_datasets` (documents + ground truth JSON per part) →
+`evaluation_runs` (pinned workflow/schema/provider versions) → per-field
+metrics: exact match, normalised match, precision, recall, F1, mean confidence,
+calibration (confidence vs. correctness), human-intervention rate, cost/doc,
+latency/doc. Human review corrections feed new ground truth.
+
+---
+
+## 16. Phased implementation plan
+
+| Phase | Scope | Exit criteria |
+|-------|-------|---------------|
+| **0** Architecture | This document, CLAUDE.md, README, lifecycle state machine | ✅ reviewed |
+| **1** Foundation | Backend skeleton (layers, config, logging, error taxonomy, correlation IDs), Postgres + Alembic (tenants, users, projects, audit_logs), Redis, object-storage port with S3/MinIO + local adapters, arq worker with heartbeat, health/readiness, auth (login, JWT, RBAC, login rate limit), bootstrap CLI, frontend shell (login, dashboard with live system status, users, settings), Docker Compose, CI | ✅ tests, lint, types green; `docker compose up` works end-to-end |
+| **2** Ingestion | Upload API + UI, MIME sniffing, size limits, scanner port, checksum dedupe, documents table, processing_jobs + queue, events, document list/detail, signed downloads, API keys | upload → job queued → visible in UI |
+| **3** Digitization | Probe (native/scanned/hybrid/image/office), native PDF text + geometry (pypdfium2), page rendering, OCR port, Tesseract adapter + MockOCR, document_pages, layout JSON | native PDFs never OCR'd; geometry stored |
+| **4** Taxonomy + classification | Document types, versioned schemas, field definitions, rule classifier, page-level classification, splitter, document_parts | 10-page mixed PDF → 3 parts |
+| **5** Extraction | Provider registry, regex/rules/key-value extractors, normalisers, confidence, provenance | fields with bbox provenance |
+| **6** Validation | Rule engine + built-ins, per-field thresholds, outcomes | invoice math/IBAN/date rules |
+| **7** Human review | Review queue, workspace (viewer + fields + validation), bbox highlight, edit/accept/reject/approve/send-back, audit read API | full HITL loop |
+| **8** Routing | Router, signals, route trace, fallback, circuit breaker, cost tracking, workflow versions, evaluation datasets | route trace visible in timeline |
+| **9** LLM | Gateway, OpenAI-compatible/Anthropic/Ollama adapters, structured output, policy enforcement, token/cost accounting | LOCAL_ONLY provably blocks cloud |
+| **10** Enrichment | REST/DB connectors, mock SAP/ERP, vendor lookup tool | enrichment results stored |
+| **11** Actions | Webhook, email, mock ERP action, tool registry, authorisation, idempotent action runs | actions only when workflow allows |
+| **12** Hardening | Tenant RLS, API rate limits, OpenTelemetry, Prometheus, backups, security review | prod checklist |
