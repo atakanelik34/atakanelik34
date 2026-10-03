@@ -92,7 +92,7 @@ async def test_dataset_from_reviews_and_run_metrics(
     assert item["document_id"] == doc_id
     assert "invoice_number" in item["wrong_fields"]
     assert body["config"]["route"] == ["NATIVE_TEXT"]
-    assert body["config"]["workflow"] == ["ingest@v6"]
+    assert body["config"]["workflow"] == ["ingest@v7"]
 
     listed = (await client.get("/api/v1/evaluation/datasets", headers=owner)).json()
     assert listed[0]["items"] == 1 and listed[0]["last_run"]["id"] == body["id"]

@@ -9,19 +9,27 @@ import { ErrorNotice, Skeleton, Spinner } from '@/components/ui/feedback'
 import { Input, Label, Select } from '@/components/ui/input'
 import { Table, TD, TH, THead, TR } from '@/components/ui/table'
 import { hasPermission, useMe } from '@/features/auth/api'
+import { useEvents } from '@/features/actions/api'
 import { useConnections, useCreateConnection, type ConnectionKind } from '@/features/enrichment/api'
+import { formatDateTime } from '@/lib/format'
 
 export const KIND_LABEL: Record<ConnectionKind, string> = {
   master_data: 'Master data (CSV)',
-  rest: 'REST API',
+  rest: 'REST API lookup',
   mock_erp: 'Mock ERP (demo)',
+  webhook: 'Webhook (actions & events)',
+  email: 'E-mail notification',
 }
 
-const REST_EXAMPLE = JSON.stringify(
-  { base_url: 'https://erp.internal/api', path: '/vendors', query: { tax_id: 'vatId', name: 'q' }, results_path: 'items', key_field: 'id', name_field: 'name' },
-  null,
-  2,
-)
+const CONFIG_EXAMPLES: Partial<Record<ConnectionKind, string>> = {
+  rest: JSON.stringify(
+    { base_url: 'https://erp.internal/api', path: '/vendors', query: { tax_id: 'vatId', name: 'q' }, results_path: 'items', key_field: 'id', name_field: 'name' },
+    null,
+    2,
+  ),
+  webhook: JSON.stringify({ url: 'https://erp.internal/hooks/idp', secret_env: 'IDP_SECRET_ERP_HOOK', events: ['document.completed'] }, null, 2),
+  email: JSON.stringify({ to: ['ap-team@example.com'], subject_prefix: '[IDP]' }, null, 2),
+}
 
 function CreateConnection() {
   const navigate = useNavigate()
@@ -29,13 +37,13 @@ function CreateConnection() {
   const [key, setKey] = useState('vendors')
   const [name, setName] = useState('Vendor master')
   const [kind, setKind] = useState<ConnectionKind>('master_data')
-  const [config, setConfig] = useState(REST_EXAMPLE)
+  const [config, setConfig] = useState('')
   const [configError, setConfigError] = useState<string | null>(null)
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     let parsed: Record<string, unknown> = {}
-    if (kind === 'rest') {
+    if (CONFIG_EXAMPLES[kind]) {
       try {
         parsed = JSON.parse(config) as Record<string, unknown>
       } catch {
@@ -65,7 +73,16 @@ function CreateConnection() {
             </div>
             <div className="space-y-1">
               <Label htmlFor="conn-kind">Kind</Label>
-              <Select id="conn-kind" value={kind} onChange={(e) => setKind(e.target.value as ConnectionKind)} className="w-48">
+              <Select
+                id="conn-kind"
+                value={kind}
+                onChange={(e) => {
+                  const next = e.target.value as ConnectionKind
+                  setKind(next)
+                  setConfig(CONFIG_EXAMPLES[next] ?? '')
+                }}
+                className="w-56"
+              >
                 {Object.entries(KIND_LABEL).map(([k, label]) => (
                   <option key={k} value={k}>
                     {label}
@@ -78,9 +95,11 @@ function CreateConnection() {
               Create
             </Button>
           </div>
-          {kind === 'rest' ? (
+          {CONFIG_EXAMPLES[kind] ? (
             <div className="space-y-1">
-              <Label htmlFor="conn-config">Configuration (JSON). Credentials: set `auth_header` and `secret_env` (an IDP_SECRET_* variable) — never the secret itself.</Label>
+              <Label htmlFor="conn-config">
+                Configuration (JSON). Secrets are referenced by an IDP_SECRET_* environment variable name — never pasted here. Hosts must be allow-listed on the server.
+              </Label>
               <textarea id="conn-config" className="h-40 w-full rounded-md border border-border p-2 font-mono text-xs" value={config} onChange={(e) => setConfig(e.target.value)} />
             </div>
           ) : null}
@@ -91,6 +110,45 @@ function CreateConnection() {
           {create.isError ? <ErrorNotice error={create.error} /> : null}
         </form>
       </CardContent>
+    </Card>
+  )
+}
+
+function EventDeliveries() {
+  const events = useEvents(true)
+  if (!events.data || events.data.length === 0) return null
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Recent events</CardTitle>
+      </CardHeader>
+      <Table>
+        <THead>
+          <tr>
+            <TH>Event</TH>
+            <TH>Created</TH>
+            <TH>Delivery</TH>
+          </tr>
+        </THead>
+        <tbody>
+          {events.data.map((e) => (
+            <TR key={e.id}>
+              <TD className="font-mono text-xs">{e.event_type}</TD>
+              <TD className="text-xs text-muted">{formatDateTime(e.created_at)}</TD>
+              <TD className="text-xs">
+                {e.published_at ? (
+                  <Badge tone={e.last_error ? 'danger' : 'success'}>
+                    {e.last_error ? 'abandoned' : Object.keys(e.deliveries).length > 0 ? `delivered to ${Object.keys(e.deliveries).length}` : 'no subscribers'}
+                  </Badge>
+                ) : (
+                  <Badge tone="warning">pending{e.attempts ? ` · ${e.attempts} attempts` : ''}</Badge>
+                )}
+                {e.last_error ? <span className="ml-2 text-muted">{e.last_error}</span> : null}
+              </TD>
+            </TR>
+          ))}
+        </tbody>
+      </Table>
     </Card>
   )
 }
@@ -160,6 +218,7 @@ export function ConnectionsPage() {
             </Table>
           </Card>
         )}
+        {hasPermission(me, 'audit:read') ? <EventDeliveries /> : null}
       </div>
     </>
   )

@@ -21,7 +21,9 @@ from arq import cron, func
 from arq.connections import RedisSettings
 
 from idp.application.jobs import JobRunner, JobScheduler, JobSweeper
+from idp.application.outbox import OutboxRelay
 from idp.application.policy import DbPolicyResolver, default_policy
+from idp.application.steps.action import ActionStep, ApproveActionsStep
 from idp.application.steps.classify import ClassifyStep
 from idp.application.steps.digitize import DigitizeStep
 from idp.application.steps.enrich import EnrichStep
@@ -37,6 +39,7 @@ from idp.infrastructure.queue.jobs import PROCESS_JOB_FUNCTION, ArqJobQueue
 from idp.infrastructure.queue.presence import PresencePublisher
 from idp.infrastructure.queue.redis import WorkerHeartbeat, arq_redis_settings, create_redis
 from idp.infrastructure.storage.factory import create_storage
+from idp.providers.actions.factory import create_action_providers, create_webhook_sender
 from idp.providers.catalog import extraction_providers
 from idp.providers.digitization.local import HybridDigitizer
 from idp.providers.enrichment.factory import (
@@ -81,6 +84,9 @@ async def build_handlers(settings: Settings, ctx: dict[str, Any]) -> dict[str, S
     policy = DbPolicyResolver(default_policy(settings))
     enrichment = create_enrichment_providers(settings)
     ctx["enrichment_providers"] = enrichment
+    sender = create_webhook_sender(settings)
+    ctx["webhook_sender"] = sender
+    actions = create_action_providers(settings, sender)
     log.info("worker.llm_providers", providers=gateway.provider_names)
     log.info("worker.ocr_engine", engine=ocr.name if ocr else "not_configured")
     steps: list[StepHandler] = [
@@ -108,6 +114,8 @@ async def build_handlers(settings: Settings, ctx: dict[str, Any]) -> dict[str, S
         ),
         ValidateStep(),
         ReviewStep(),
+        ApproveActionsStep(providers=actions, policy=policy),
+        ActionStep(providers=actions, policy=policy),
     ]
     return {step.key: step for step in steps}
 
@@ -125,6 +133,12 @@ async def startup(ctx: dict[str, Any]) -> None:
     handlers = await build_handlers(_settings, ctx)
     ctx["runner"] = JobRunner(session_factory, scheduler, handlers, _settings)
     ctx["sweeper"] = JobSweeper(session_factory, scheduler, _settings)
+    ctx["outbox"] = OutboxRelay(
+        session_factory,
+        ctx["webhook_sender"],
+        batch_size=_settings.outbox_batch_size,
+        max_attempts=_settings.outbox_max_attempts,
+    )
 
     hostname = socket.gethostname()
     now = time.time()
@@ -155,6 +169,8 @@ async def shutdown(ctx: dict[str, Any]) -> None:
         await ctx["llm_gateway"].aclose()
     if "enrichment_providers" in ctx:
         await close_enrichment_providers(ctx["enrichment_providers"])
+    if "webhook_sender" in ctx:
+        await ctx["webhook_sender"].aclose()
     await ctx["app_redis"].aclose()
     await ctx["engine"].dispose()
     log.info("worker.stopped", worker_id=presence.worker_id)
@@ -164,6 +180,11 @@ async def process_job(ctx: dict[str, Any], job_id: str) -> str:
     runner: JobRunner = ctx["runner"]
     outcome = await runner.run(uuid.UUID(job_id))
     return outcome.value
+
+
+async def relay_outbox(ctx: dict[str, Any]) -> int:
+    relay: OutboxRelay = ctx["outbox"]
+    return await relay.relay()
 
 
 async def sweep_jobs(ctx: dict[str, Any]) -> int:
@@ -185,7 +206,9 @@ class WorkerSettings:
     ]
     # Cluster-wide (arq de-duplicates cron runs by id): one sweep per tick.
     cron_jobs: ClassVar[list[Any]] = [
-        cron(sweep_jobs, second={0, 30}, run_at_startup=True, keep_result=0, max_tries=1)
+        cron(sweep_jobs, second={0, 30}, run_at_startup=True, keep_result=0, max_tries=1),
+        # Event delivery; claims are leased with SKIP LOCKED, so overlap is harmless.
+        cron(relay_outbox, second={5, 15, 25, 35, 45, 55}, keep_result=0, max_tries=1),
     ]
     on_startup = startup
     on_shutdown = shutdown

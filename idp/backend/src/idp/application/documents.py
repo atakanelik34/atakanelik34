@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from idp.application.audit import AuditAction, AuditEntity, record_audit
 from idp.application.document_status import change_document_status
 from idp.application.jobs import JobScheduler, JobTrigger
+from idp.domain.documents import DocumentSource
 from idp.domain.errors import ConflictError, NotFoundError, ValidationError
 from idp.domain.geometry import PageLayout
 from idp.domain.identity import Principal
@@ -118,6 +119,7 @@ class DocumentService:
         status: DocumentStatus | None,
         limit: int,
         cursor: str | None,
+        source: DocumentSource | None = None,
     ) -> DocumentListPage:
         limit = max(1, min(limit, MAX_PAGE_SIZE))
         query = select(Document).where(
@@ -125,6 +127,8 @@ class DocumentService:
         )
         if status is not None:
             query = query.where(Document.status == status)
+        if source is not None:
+            query = query.where(Document.source == source.value)
         if cursor:
             created_at, last_id = decode_cursor(cursor)
             query = query.where(

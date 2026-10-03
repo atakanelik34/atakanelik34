@@ -786,7 +786,7 @@ latency/doc. Human review corrections feed new ground truth.
 | **8** Routing ✅ | Router, signals, route trace, fallback, circuit breaker, cost tracking, workflow versions, evaluation datasets | route trace visible in timeline |
 | **9** LLM ✅ | Gateway, OpenAI-compatible/Anthropic/Ollama adapters, structured output, policy enforcement, token/cost accounting | LOCAL_ONLY provably blocks cloud |
 | **10** Enrichment ✅ | REST/DB connectors, mock SAP/ERP, vendor lookup tool | enrichment results stored |
-| **11** Actions | Webhook, email, mock ERP action, authorisation, idempotent action runs, event outbox (first consumer), API keys for machine ingestion | actions only when workflow allows |
+| **11** Actions ✅ | Webhook, email, mock ERP action, authorisation, idempotent action runs, event outbox (first consumer), API keys for machine ingestion | actions only when workflow allows |
 | **12** Hardening | Tenant RLS, separate migration/runtime DB roles, API rate limits, OpenTelemetry, Prometheus, backups, sandboxed parsers, non-root nginx, image digests + resource limits, production manifests, ClamAV adapter, security review | prod checklist |
 
 ---
@@ -1010,4 +1010,46 @@ revisited deliberately. Deferred items name the phase that owns them.
 * **Deferred**: writing enrichment outputs back into extracted fields; they are
   exposed in the result contract (`enrichment`) and are available to actions
   (phase 11).
+
+### Phase 11 — Actions, events, machine ingestion
+* **Only declared actions exist.** `SchemaDefinition.actions` (versioned with
+  the document type) names each action, its connection and a payload built
+  from references (`field:`, `table:`, `enrichment:`, `document:`, `const:`),
+  validated at save. There is no generic execute capability; LLM output can
+  never become an action (CLAUDE.md non-negotiable 1).
+* **Workflow `ingest` v7**: … review → `approve_actions` → `action`. The gate
+  plans one `ActionRun` per (job, part, action) with idempotency key
+  `job:part:action` and, when approval is required (default), pauses the job
+  with the document READY_FOR_ACTION. Approve/reject (`actions:execute`,
+  operator+, audited) marks the gate SUCCEEDED and resumes the same job — the
+  same mechanism as review approval. Rejected runs are skipped; the document
+  completes without side effects.
+* **Execution** commits each action's outcome in its own transaction while
+  holding the run's row lock — a deliberate exception to "steps never commit"
+  so an external side effect is never forgotten because a later action failed.
+  Succeeded runs are never executed again; receivers get the same
+  `Idempotency-Key` on any retry. Transient failures retry the job;
+  permanent refusals and missing/unconfigured/mock-disallowed connections fail
+  it (replayable).
+* **Providers**: signed webhook (HMAC-SHA256 over `t.body`, `X-IDP-Signature:
+  t=…,v1=…`, allow-listed hosts via `WEBHOOK_ALLOWED_HOSTS`, secret from an
+  `IDP_SECRET_*` variable, no redirects; 2xx/409 success), SMTP e-mail to a
+  fixed recipient list from the connection (never from document content;
+  "not configured" without `SMTP_HOST`), labelled mock ERP returning a
+  deterministic fake reference.
+* **Transactional outbox**: `change_document_status` and action outcomes
+  write `outbox_events` in the same transaction (ids and statuses only). A
+  worker cron relays due events with a leased claim (`SKIP LOCKED`) to webhook
+  connections subscribed to the event type, tracking per-subscriber success so
+  retries never resend to a subscriber that accepted; exponential backoff,
+  abandoned after `OUTBOX_MAX_ATTEMPTS` (visible in the UI).
+* **API keys**: `idp_<prefix>_<secret>`, SHA-256 of the secret stored, shown
+  once; scopes limited to `documents:read|write` and always intersected with
+  the creator's current role; revocation, expiry, creator deactivation take
+  effect immediately. Uploads with a key are recorded as source `api` and
+  audited with actor type `api_key`. Key management requires `users:write` and
+  is not available to keys themselves.
+* **Deferred**: e-mail/SFTP ingestion channels (the ingestion service already
+  takes a `DocumentSource`; adapters are new channels, not new pipeline code);
+  per-endpoint webhook rate limits.
 

@@ -15,12 +15,13 @@ import { apiRequest } from '@/lib/api'
 const documentsKey = ['documents'] as const
 const ACTIVE_POLL_MS = 2_000
 
-export function useDocuments(status: DocumentStatus | null, enabled: boolean) {
+export function useDocuments(status: DocumentStatus | null, enabled: boolean, source: string | null = null) {
   return useInfiniteQuery({
-    queryKey: [...documentsKey, 'list', status],
+    queryKey: [...documentsKey, 'list', status, source],
     queryFn: ({ pageParam, signal }) => {
       const params = new URLSearchParams({ limit: '25' })
       if (status) params.set('status', status)
+      if (source) params.set('source', source)
       if (pageParam) params.set('cursor', pageParam)
       return apiRequest<DocumentList>(`/documents?${params.toString()}`, { signal })
     },

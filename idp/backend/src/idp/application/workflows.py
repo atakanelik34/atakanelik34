@@ -46,12 +46,29 @@ INGEST_V6 = WorkflowDefinition(
     steps=("probe", "digitize", "classify", "extract", "enrich", "validate", "review"),
 )
 
-DEFAULT_WORKFLOW = INGEST_V6
+# Phase 11: configured business actions after review (approval-gated by default).
+INGEST_V7 = WorkflowDefinition(
+    key="ingest",
+    version=7,
+    steps=(
+        "probe",
+        "digitize",
+        "classify",
+        "extract",
+        "enrich",
+        "validate",
+        "review",
+        "approve_actions",
+        "action",
+    ),
+)
+
+DEFAULT_WORKFLOW = INGEST_V7
 
 # Old versions stay registered: jobs pinned to them must still run unchanged.
 _REGISTRY: dict[tuple[str, int], WorkflowDefinition] = {
     (w.key, w.version): w
-    for w in (INGEST_V1, INGEST_V2, INGEST_V3, INGEST_V4, INGEST_V5, INGEST_V6)
+    for w in (INGEST_V1, INGEST_V2, INGEST_V3, INGEST_V4, INGEST_V5, INGEST_V6, INGEST_V7)
 }
 
 
@@ -74,9 +91,18 @@ class AwaitingHumanReview(Exception):  # noqa: N818 — a control-flow signal, n
     WAITING_FOR_HUMAN — all fenced, in one transaction.
     """
 
-    def __init__(self, reasons: list[dict[str, Any]]) -> None:
-        super().__init__("human review required")
+    def __init__(
+        self,
+        reasons: list[dict[str, Any]],
+        *,
+        document_status: DocumentStatus = DocumentStatus.WAITING_FOR_HUMAN,
+        reason: str = "human review required",
+    ) -> None:
+        super().__init__(reason)
         self.reasons = reasons
+        # WAITING_FOR_HUMAN (review) or READY_FOR_ACTION (action approval).
+        self.document_status = document_status
+        self.reason = reason
 
 
 @dataclass(slots=True)

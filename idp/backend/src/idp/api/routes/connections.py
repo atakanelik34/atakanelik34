@@ -28,7 +28,7 @@ def get_service(container: ContainerDep, session: SessionDep) -> ConnectionServi
 
 Service = Annotated[ConnectionService, Depends(get_service)]
 
-KIND_PATTERN = "^(master_data|rest|mock_erp)$"
+KIND_PATTERN = "^(master_data|rest|mock_erp|webhook|email)$"
 
 
 class ConnectionOut(BaseModel):

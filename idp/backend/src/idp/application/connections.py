@@ -87,13 +87,19 @@ class ConnectionService:
                 },
             ) from exc
         data = parsed.model_dump(exclude_none=True)
-        if kind == "rest":
-            host = (urlsplit(str(data["base_url"])).hostname or "").lower()
-            if host not in self._settings.enrichment_allowed_host_set:
-                raise ValidationError(
-                    f"Host '{host}' is not in ENRICHMENT_ALLOWED_HOSTS",
-                    details={"host": host},
-                )
+        allow_lists = {
+            "rest": (
+                "base_url",
+                self._settings.enrichment_allowed_host_set,
+                "ENRICHMENT_ALLOWED_HOSTS",
+            ),
+            "webhook": ("url", self._settings.webhook_allowed_host_set, "WEBHOOK_ALLOWED_HOSTS"),
+        }
+        if kind in allow_lists:
+            attribute, allowed, setting = allow_lists[kind]
+            host = (urlsplit(str(data[attribute])).hostname or "").lower()
+            if host not in allowed:
+                raise ValidationError(f"Host '{host}' is not in {setting}", details={"host": host})
         return data
 
     async def _count(self, connection_id: uuid.UUID) -> int:

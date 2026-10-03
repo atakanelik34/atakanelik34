@@ -30,7 +30,8 @@ per document by a routing engine that respects a local-first data policy.
 | 8 | Routing: signal-based router with policy enforcement, staged fallback, circuit breakers, cost tracking, route trace; evaluation datasets/runs; processing monitor, workflows, providers and evaluation UI | ✅ |
 | 9 | LLM: gateway (allow-list, policy, retries, breaker, usage), OpenAI-compatible/Anthropic/Ollama adapters + labelled mock, grounded LLM extraction, LLM classification fallback, tenant processing policy | ✅ |
 | 10 | Enrichment: connections (CSV master data, allow-listed REST, labelled mock ERP), deterministic vendor matching, lookup validation rule, connections UI | ✅ |
-| 11–12 | Actions → production hardening | in progress ([roadmap](ARCHITECTURE.md#16-phased-implementation-plan)) |
+| 11 | Actions: approval-gated, idempotent business actions (signed webhook, SMTP, labelled mock ERP), transactional outbox with subscribed webhooks, API keys and Inbox | ✅ |
+| 12 | Production hardening | in progress ([roadmap](ARCHITECTURE.md#16-phased-implementation-plan)) |
 
 The UI shows planned sections in the navigation as disabled with their phase
 number; nothing in the product is simulated.

@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { apiRequest } from '@/lib/api'
 
-export type ConnectionKind = 'master_data' | 'rest' | 'mock_erp'
+export type ConnectionKind = 'master_data' | 'rest' | 'mock_erp' | 'webhook' | 'email'
 
 export interface ConnectionInfo {
   id: string

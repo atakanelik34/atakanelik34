@@ -148,12 +148,46 @@ class EnrichmentRule(_Strict):
         return match
 
 
+PAYLOAD_REF_PATTERN = (
+    r"^(field:[a-z][a-z0-9_.\[\]]{0,200}|table:[a-z][a-z0-9_]{0,62}\[\]"
+    r"|enrichment:[a-z][a-z0-9_]{0,62}(\.[a-z][a-z0-9_]{0,62})?"
+    r"|document:(id|filename|type|pages)|const:.{0,200})$"
+)
+
+
+class ActionSpec(_Strict):
+    """A business action this document type may trigger once processing is done.
+
+    Only actions listed here can ever run — the platform has no generic
+    "execute" capability. `payload` maps output keys to references
+    (`field:<path>`, `table:<group[]>`, `enrichment:<name>[.<attr>]`,
+    `document:id|filename|type|pages`, `const:<text>`); empty = a standard
+    payload with all fields, tables and enrichment outputs.
+    """
+
+    name: str = Field(pattern=NAME_PATTERN)
+    connection: str = Field(pattern=CONNECTION_KEY_PATTERN)
+    payload: dict[str, str] = Field(default_factory=dict, max_length=100)
+    requires_approval: bool = True
+
+    @field_validator("payload")
+    @classmethod
+    def _refs(cls, payload: dict[str, str]) -> dict[str, str]:
+        for key, ref in payload.items():
+            if not regex.fullmatch(ATTRIBUTE_PATTERN, key):
+                raise ValueError(f"invalid payload key '{key}'")
+            if not regex.fullmatch(PAYLOAD_REF_PATTERN, ref):
+                raise ValueError(f"invalid payload reference '{ref}'")
+        return payload
+
+
 class SchemaDefinition(_Strict):
     fields: list[FieldDefinition] = Field(default_factory=list)
     # Cross-field rules, e.g. {"type": "sum", "params": {"total": "total", "parts": [...]}}.
     rules: list[RuleSpec] = Field(default_factory=list, max_length=50)
     classification: ClassificationRules = Field(default_factory=ClassificationRules)
     enrichment: list[EnrichmentRule] = Field(default_factory=list, max_length=10)
+    actions: list[ActionSpec] = Field(default_factory=list, max_length=10)
 
     @model_validator(mode="after")
     def _unique(self) -> Self:
@@ -198,6 +232,18 @@ class SchemaDefinition(_Strict):
             name = rule.params.get("enrichment")
             if rule.type == "lookup" and name not in names:
                 raise ValueError(f"rules[{i}] refers to unknown enrichment '{name}'")
+        action_names = [a.name for a in self.actions]
+        if len(action_names) != len(set(action_names)):
+            raise ValueError("action names must be unique")
+        for action in self.actions:
+            for ref in action.payload.values():
+                kind, _, target = ref.partition(":")
+                if kind in ("field", "table") and target not in known:
+                    raise ValueError(f"action '{action.name}' refers to unknown field '{target}'")
+                if kind == "enrichment" and target.split(".")[0] not in names:
+                    raise ValueError(
+                        f"action '{action.name}' refers to unknown enrichment '{target}'"
+                    )
         return self
 
     def flatten(self) -> list[tuple[str, FieldDefinition]]:

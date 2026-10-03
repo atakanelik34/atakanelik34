@@ -19,6 +19,7 @@ from idp.infrastructure.db.models import AuditLog
 
 class ActorType(StrEnum):
     USER = "user"
+    API_KEY = "api_key"
     SYSTEM = "system"
     ANONYMOUS = "anonymous"
 
@@ -59,6 +60,13 @@ class AuditAction(StrEnum):
     CONNECTION_UPDATED = "connection.updated"
     CONNECTION_DELETED = "connection.deleted"
     MASTER_DATA_IMPORTED = "connection.master_data_imported"
+    API_KEY_CREATED = "api_key.created"
+    API_KEY_REVOKED = "api_key.revoked"
+    ACTIONS_REQUESTED = "action.approval_requested"
+    ACTIONS_APPROVED = "action.approved"
+    ACTIONS_REJECTED = "action.rejected"
+    ACTION_SUCCEEDED = "action.succeeded"
+    ACTION_FAILED = "action.failed"
 
 
 class AuditEntity(StrEnum):
@@ -72,6 +80,8 @@ class AuditEntity(StrEnum):
     EVALUATION_DATASET = "evaluation_dataset"
     PROCESSING_POLICY = "processing_policy"
     CONNECTION = "connection"
+    API_KEY = "api_key"
+    ACTION_RUN = "action_run"
 
 
 def record_audit(
@@ -86,7 +96,12 @@ def record_audit(
     before: dict[str, Any] | None = None,
     after: dict[str, Any] | None = None,
 ) -> AuditLog:
-    resolved_actor_type = actor_type or (ActorType.USER if actor else ActorType.ANONYMOUS)
+    if actor_type is None:
+        if actor is None:
+            actor_type = ActorType.ANONYMOUS
+        else:
+            actor_type = ActorType.API_KEY if actor.api_key_id else ActorType.USER
+    resolved_actor_type = actor_type
     entry = AuditLog(
         tenant_id=tenant_id,
         actor_type=resolved_actor_type.value,

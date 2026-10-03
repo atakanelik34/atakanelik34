@@ -142,6 +142,21 @@ class Settings(BaseSettings):
     master_data_max_import_bytes: int = Field(default=5 * 1024 * 1024, ge=1024)
     master_data_max_rows: int = Field(default=50_000, ge=1)
 
+    # --- Actions and events (phase 11) ---------------------------------------------
+    # Hosts webhook connections may call (comma-separated). Empty: webhooks disabled.
+    webhook_allowed_hosts: str = ""
+    webhook_timeout_seconds: float = Field(default=15.0, gt=0)
+    # SMTP for e-mail actions; without SMTP_HOST e-mail actions are "not configured".
+    smtp_host: str | None = None
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_username: str | None = None
+    smtp_password: SecretStr = SecretStr("")
+    smtp_from: str | None = None
+    smtp_starttls: bool = True
+    smtp_timeout_seconds: float = Field(default=15.0, gt=0)
+    outbox_batch_size: int = Field(default=50, ge=1, le=500)
+    outbox_max_attempts: int = Field(default=10, ge=1)
+
     @staticmethod
     def _hosts(raw: str) -> frozenset[str]:
         return frozenset(h.strip().lower() for h in raw.split(",") if h.strip())
@@ -153,6 +168,10 @@ class Settings(BaseSettings):
     @property
     def enrichment_allowed_host_set(self) -> frozenset[str]:
         return self._hosts(self.enrichment_allowed_hosts)
+
+    @property
+    def webhook_allowed_host_set(self) -> frozenset[str]:
+        return self._hosts(self.webhook_allowed_hosts)
 
     @property
     def llm_local_host_set(self) -> frozenset[str]:

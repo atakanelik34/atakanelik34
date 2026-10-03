@@ -1,5 +1,6 @@
 """ORM models. Import every model here so Alembic sees the full metadata."""
 
+from idp.infrastructure.db.models.actions import ActionRun, ApiKey, OutboxEvent
 from idp.infrastructure.db.models.audit import AuditLog
 from idp.infrastructure.db.models.documents import (
     Document,
@@ -29,6 +30,8 @@ from idp.infrastructure.db.models.taxonomy import (
 )
 
 __all__ = [
+    "ActionRun",
+    "ApiKey",
     "AuditLog",
     "Connection",
     "Document",
@@ -42,6 +45,7 @@ __all__ = [
     "ExtractedField",
     "ExtractionResult",
     "MasterDataRecord",
+    "OutboxEvent",
     "ProcessingJob",
     "ProcessingPolicy",
     "ProcessingStep",

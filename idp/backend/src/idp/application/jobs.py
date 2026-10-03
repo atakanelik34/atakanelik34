@@ -338,9 +338,7 @@ class JobRunner:
             document = _require(
                 await session.get(Document, job.document_id, with_for_update=True), "document"
             )
-            change_document_status(
-                session, document, DocumentStatus.WAITING_FOR_HUMAN, reason="human review required"
-            )
+            change_document_status(session, document, signal.document_status, reason=signal.reason)
             await session.commit()
         except _LeaseLostError:
             await session.rollback()

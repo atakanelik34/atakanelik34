@@ -13,6 +13,7 @@ export type Permission =
   | 'users:write'
   | 'audit:read'
   | 'system:read'
+  | 'actions:execute'
   | 'tenant:manage'
 
 export interface User {

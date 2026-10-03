@@ -38,7 +38,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: 'Dashboard', icon: LayoutDashboard, to: '/' },
       { label: 'Documents', icon: FileText, to: '/documents', permission: 'documents:read' },
-      { label: 'Inbox', icon: Inbox, plannedPhase: 11 },
+      { label: 'Inbox', icon: Inbox, to: '/inbox', permission: 'documents:read' },
       { label: 'Processing', icon: Activity, to: '/processing', permission: 'documents:read' },
       { label: 'Review queue', icon: ClipboardCheck, to: '/reviews', permission: 'reviews:read' },
     ],

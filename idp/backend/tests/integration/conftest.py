@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from idp.application.auth import principal_from_user
 from idp.application.jobs import JobRunner, JobScheduler, JobSweeper
 from idp.application.policy import StaticPolicyResolver
+from idp.application.steps.action import ActionStep, ApproveActionsStep
 from idp.application.steps.classify import ClassifyStep
 from idp.application.steps.digitize import DigitizeStep
 from idp.application.steps.enrich import EnrichStep
@@ -26,6 +27,7 @@ from idp.domain.identity import Role
 from idp.domain.routing import PolicySnapshot
 from idp.infrastructure.db.repositories import UserRepository
 from idp.main import create_app
+from idp.providers.actions.mock_erp import MockERPActionProvider
 from idp.providers.digitization.local import HybridDigitizer
 from idp.providers.enrichment.master_data import MasterDataProvider
 from idp.providers.enrichment.mock_erp import MockERPProvider
@@ -157,6 +159,10 @@ def digitize_step(container: Container, digitizer: HybridDigitizer) -> DigitizeS
     return DigitizeStep(storage=container.storage, digitizer=digitizer, tmp_dir=None)
 
 
+def _action_providers() -> dict:
+    return {"mock_erp": MockERPActionProvider()}
+
+
 @pytest.fixture
 def default_handlers(
     container: Container, probe_step: ProbeStep, digitize_step: DigitizeStep
@@ -176,6 +182,10 @@ def default_handlers(
         ),
         ValidateStep(),
         ReviewStep(),
+        ApproveActionsStep(
+            providers=_action_providers(), policy=StaticPolicyResolver(PolicySnapshot())
+        ),
+        ActionStep(providers=_action_providers(), policy=StaticPolicyResolver(PolicySnapshot())),
     ]
     return {step.key: step for step in steps}
 

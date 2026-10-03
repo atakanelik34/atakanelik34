@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from idp.application.api_keys import ApiKeyService, is_api_key
 from idp.application.audit import AuditAction, AuditEntity, record_audit
 from idp.domain.errors import AuthenticationError
 from idp.domain.identity import Principal
@@ -94,6 +95,8 @@ class AuthService:
         return LoginResult(token=token, principal=principal)
 
     async def authenticate(self, token: str) -> Principal:
+        if is_api_key(token):
+            return await ApiKeyService(self._session).authenticate(token)
         claims = self._tokens.decode(token)
         user = await self._users.get(tenant_id=claims.tenant_id, user_id=claims.user_id)
         if user is None or not user.is_active or user.token_version != claims.token_version:

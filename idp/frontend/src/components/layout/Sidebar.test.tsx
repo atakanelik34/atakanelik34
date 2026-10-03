@@ -29,12 +29,11 @@ describe('Sidebar', () => {
     expect(screen.getByText('Acme Ltd')).toBeInTheDocument()
   })
 
-  it('shows planned sections as disabled with their phase, not as fake pages', () => {
-    renderRoutes([{ path: '/', element: <Sidebar me={me(['users:read'])} /> }], '/')
+  it('links every section the role can access, with no placeholder pages', () => {
+    const { container } = renderRoutes([{ path: '/', element: <Sidebar me={me(['documents:read', 'config:read', 'users:read'])} /> }], '/')
     expect(screen.getByRole('link', { name: 'Users' })).toBeInTheDocument()
-    const inbox = screen.getByText('Inbox').closest('[aria-disabled="true"]')
-    expect(inbox).not.toBeNull()
-    expect(inbox).toHaveTextContent('P11')
-    expect(screen.queryByRole('link', { name: /Inbox/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Inbox' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Connections' })).toBeInTheDocument()
+    expect(container.querySelector('[aria-disabled="true"]')).toBeNull()
   })
 })

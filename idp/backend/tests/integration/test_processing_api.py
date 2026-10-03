@@ -36,7 +36,7 @@ async def test_workflows_and_job_monitor(
     workflows = (await client.get("/api/v1/workflows", headers=headers)).json()
     default = [w for w in workflows if w["is_default"]]
     assert len(default) == 1
-    assert default[0]["steps"][-2:] == ["validate", "review"]
+    assert default[0]["steps"][-2:] == ["approve_actions", "action"]
 
     body = (await upload(client, headers, files.native_pdf())).json()
     jobs = (await client.get("/api/v1/jobs?status=QUEUED", headers=headers)).json()

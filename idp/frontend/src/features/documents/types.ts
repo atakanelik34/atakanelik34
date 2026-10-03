@@ -35,6 +35,7 @@ export interface DocumentSummary {
   status: DocumentStatus
   page_count: number | null
   received_at: string
+  source?: string
 }
 
 export interface Page {

@@ -19,6 +19,7 @@ class DocumentSummary(BaseModel):
     status: DocumentStatus
     page_count: int | None
     received_at: datetime
+    source: str
 
 
 class PageOut(BaseModel):

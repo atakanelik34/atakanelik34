@@ -134,3 +134,9 @@ class PolicyViolationError(BusinessError):
     """A call the tenant's processing policy (or the deployment) does not permit."""
 
     code = "policy_violation"
+
+
+class ActionFailedError(BusinessError):
+    """A configured action was refused by the target system (not retryable)."""
+
+    code = "action_failed"

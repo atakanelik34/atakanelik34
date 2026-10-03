@@ -40,6 +40,7 @@ def make_settings(tmp_path: Path, **overrides: object) -> Settings:
         "database_url": TEST_DATABASE_URL or "postgresql+asyncpg://unused@localhost/unused",
         "redis_url": TEST_REDIS_URL or "redis://localhost:6379/15",
         "login_rate_limit_attempts": 5,
+        "webhook_allowed_hosts": "hooks.example.test",
         **overrides,
     }
     return Settings.model_validate(values)

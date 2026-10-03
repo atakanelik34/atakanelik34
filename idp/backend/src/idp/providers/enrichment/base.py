@@ -7,6 +7,7 @@ its credential, so secrets stay in the deployment environment.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from typing import Literal, Protocol
 from urllib.parse import urlsplit
@@ -17,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from idp.domain.matching import Match
 from idp.infrastructure.db.models import Connection
 
-ConnectionKind = Literal["master_data", "rest", "mock_erp"]
+ConnectionKind = Literal["master_data", "rest", "mock_erp", "webhook", "email"]
 
 
 class _Strict(BaseModel):
@@ -57,10 +58,69 @@ class RestConfig(_Strict):
         return value.rstrip("/")
 
 
+class WebhookConfig(_Strict):
+    """Outbound webhook (actions and event subscriptions). Signed with HMAC-SHA256."""
+
+    url: str = Field(max_length=500)
+    # Environment variable (IDP_SECRET_*) holding the signing secret.
+    secret_env: str = Field(pattern=r"^IDP_SECRET_[A-Z0-9_]{1,60}$")
+    # Outbox events to deliver to this endpoint (empty: actions only).
+    events: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("url")
+    @classmethod
+    def _url(cls, value: str) -> str:
+        parts = urlsplit(value)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            raise ValueError("url must be an http(s) URL")
+        if parts.username or parts.password:
+            raise ValueError("credentials do not belong in the URL; use secret_env")
+        return value
+
+    @field_validator("events")
+    @classmethod
+    def _events(cls, events: list[str]) -> list[str]:
+        unknown = set(events) - set(EVENT_TYPES)
+        if unknown:
+            raise ValueError(f"unknown event types: {', '.join(sorted(unknown))}")
+        return events
+
+
+class EmailConfig(_Strict):
+    """Notification e-mail to a fixed, configured recipient list (never from documents)."""
+
+    to: list[str] = Field(min_length=1, max_length=10)
+    subject_prefix: str = Field(default="[IDP]", max_length=60)
+
+    @field_validator("to")
+    @classmethod
+    def _addresses(cls, to: list[str]) -> list[str]:
+        for address in to:
+            if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", address):
+                raise ValueError(f"invalid e-mail address '{address}'")
+        return to
+
+
+EVENT_TYPES = (
+    "document.completed",
+    "document.failed",
+    "document.rejected",
+    "document.waiting_for_human",
+    "document.ready_for_action",
+    "action.succeeded",
+    "action.failed",
+)
+
+# Connection kinds usable for lookups (enrichment) and for actions.
+LOOKUP_KINDS = frozenset({"master_data", "rest", "mock_erp"})
+ACTION_KINDS = frozenset({"webhook", "email", "mock_erp"})
+
 CONFIG_MODELS: Mapping[str, type[_Strict]] = {
     "master_data": MasterDataConfig,
     "rest": RestConfig,
     "mock_erp": MockERPConfig,
+    "webhook": WebhookConfig,
+    "email": EmailConfig,
 }
 
 

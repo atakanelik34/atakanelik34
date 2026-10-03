@@ -15,6 +15,7 @@ import { ProvidersPage } from '@/features/processing/ProvidersPage'
 import { WorkflowsPage } from '@/features/processing/WorkflowsPage'
 import { SettingsPage } from '@/features/settings/SettingsPage'
 import { UsersPage } from '@/features/users/UsersPage'
+import { InboxPage } from '@/features/actions/InboxPage'
 import { AuditLogPage } from '@/features/audit/AuditLogPage'
 import { ReviewQueuePage } from '@/features/review/ReviewQueuePage'
 import { ReviewWorkspacePage } from '@/features/review/ReviewWorkspacePage'
@@ -44,6 +45,7 @@ export const routes = [
       { path: 'providers', element: <ProvidersPage /> },
       { path: 'evaluation', element: <EvaluationPage /> },
       { path: 'connections', element: <ConnectionsPage /> },
+      { path: 'inbox', element: <InboxPage /> },
       { path: 'connections/:id', element: <ConnectionDetailPage /> },
       { path: 'evaluation/:id', element: <DatasetPage /> },
       { path: 'users', element: <UsersPage /> },

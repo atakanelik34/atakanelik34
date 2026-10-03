@@ -108,7 +108,7 @@ async def upload(
                 stream=upload_file.file,
                 filename=upload_file.filename,
                 declared_mime_type=upload_file.content_type,
-                source=DocumentSource.WEB_UPLOAD,
+                source=DocumentSource.API if principal.api_key_id else DocumentSource.WEB_UPLOAD,
                 project_key=project_key if isinstance(project_key, str) else None,
             ),
         )
@@ -122,10 +122,13 @@ async def list_documents(
     principal: Reader,
     documents: Documents,
     status_filter: Annotated[DocumentStatus | None, Query(alias="status")] = None,
+    source: Annotated[DocumentSource | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     cursor: Annotated[str | None, Query(max_length=200)] = None,
 ) -> DocumentList:
-    page = await documents.list(principal, status=status_filter, limit=limit, cursor=cursor)
+    page = await documents.list(
+        principal, status=status_filter, limit=limit, cursor=cursor, source=source
+    )
     return DocumentList(
         items=[DocumentSummary.model_validate(d) for d in page.items],
         next_cursor=page.next_cursor,

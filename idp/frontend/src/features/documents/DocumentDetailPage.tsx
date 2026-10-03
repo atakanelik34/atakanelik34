@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { ErrorNotice, Skeleton } from '@/components/ui/feedback'
 import { Table, TD, TH, THead, TR } from '@/components/ui/table'
+import { ActionsCard } from '@/features/actions/ActionsCard'
 import { hasPermission, useMe } from '@/features/auth/api'
 import {
   openDownload,
@@ -249,6 +250,7 @@ export function DocumentDetailPage() {
             )}
           </div>
           <div className="space-y-6 lg:col-span-2">
+            <ActionsCard documentId={doc.id} awaitingApproval={doc.status === 'READY_FOR_ACTION'} />
             <PartsCard parts={parts.data ?? []} onSelect={setViewerPage} />
             {result.data?.parts
               .filter((p) => p.extraction)
