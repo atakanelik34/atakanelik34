@@ -39,6 +39,7 @@ const DETAIL = {
         vendor_name: field({ id: 'v', path: 'vendor_name', value: 'ACME', confidence: 0.4, below_threshold: true, alternatives: [{ value: 'ACME GmbH', confidence: 0.35, method: 'first_line', page: 1, bbox: null }] }),
       },
       tables: {},
+      enrichment: [{ name: 'vendor', connection: 'vendors', provider: 'master_data', status: 'not_found', record_key: null, score: null, matched_on: [], criteria: { name: 'ACME' }, outputs: {}, candidates: [], is_mock: false, message: '' }],
       validation: [{ rule_id: 'sum', rule_type: 'sum', outcome: 'FAIL', fields: ['total'], message: 'Lines do not add up', severity: 'FAIL', details: {} }],
     },
   ],

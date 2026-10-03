@@ -51,6 +51,8 @@ class ValidationContext:
     fields: dict[str, FieldState]  # scalar paths
     rows: dict[str, list[dict[str, FieldState]]] = field(default_factory=dict)  # "lines[]" -> rows
     today: date = field(default_factory=date.today)
+    # Enrichment outcomes by enrichment name: matched | not_found | ambiguous | ...
+    enrichment: dict[str, str] = field(default_factory=dict)
 
     def value(self, path: str) -> Any:
         state = self.fields.get(path)
@@ -339,6 +341,22 @@ class RuleKind:
     cross_field: bool = False
 
 
+def _lookup(
+    rule: RuleSpec, ctx: ValidationContext, path: str | None
+) -> tuple[bool, str, dict[str, Any]] | None:
+    del path
+    name = str(rule.params["enrichment"])
+    status = ctx.enrichment.get(name)
+    if status is None:
+        return None  # the enrichment did not run for this part
+    accepted = rule.params.get("require", ["matched"])
+    return (
+        status in accepted,
+        f"Lookup '{name}' returned {status.replace('_', ' ')}",
+        {"enrichment": name, "status": status},
+    )
+
+
 RULES: dict[str, RuleKind] = {
     "regex": RuleKind(_regex, ("pattern",)),
     "min": RuleKind(_min_max("min"), ("value",)),
@@ -354,6 +372,7 @@ RULES: dict[str, RuleKind] = {
     "line_items_sum": RuleKind(
         _line_items_sum, ("lines", "line_total", "target"), cross_field=True
     ),
+    "lookup": RuleKind(_lookup, ("enrichment",), cross_field=True),
     "line_item_math": RuleKind(
         _line_item_math, ("lines", "quantity", "unit_price", "total"), cross_field=True
     ),

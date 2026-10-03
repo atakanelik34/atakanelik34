@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import type { FieldValue, ValidationOutcome } from '@/features/extraction/types'
+import type { EnrichmentOutcome, FieldValue, ValidationOutcome } from '@/features/extraction/types'
 import { apiRequest } from '@/lib/api'
 
 export interface ReviewReason {
@@ -34,6 +34,7 @@ export interface ReviewPart {
   schema_version: number | null
   fields: Record<string, FieldValue>
   tables: Record<string, { row_id: string; cells: Record<string, FieldValue> }[]>
+  enrichment: EnrichmentOutcome[]
   validation: (ValidationOutcome & {
     rule_type: string
     details: Record<string, unknown>

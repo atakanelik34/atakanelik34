@@ -32,9 +32,9 @@ describe('Sidebar', () => {
   it('shows planned sections as disabled with their phase, not as fake pages', () => {
     renderRoutes([{ path: '/', element: <Sidebar me={me(['users:read'])} /> }], '/')
     expect(screen.getByRole('link', { name: 'Users' })).toBeInTheDocument()
-    const connections = screen.getByText('Connections').closest('[aria-disabled="true"]')
-    expect(connections).not.toBeNull()
-    expect(connections).toHaveTextContent('P10')
-    expect(screen.queryByRole('link', { name: /Connections/ })).not.toBeInTheDocument()
+    const inbox = screen.getByText('Inbox').closest('[aria-disabled="true"]')
+    expect(inbox).not.toBeNull()
+    expect(inbox).toHaveTextContent('P11')
+    expect(screen.queryByRole('link', { name: /Inbox/ })).not.toBeInTheDocument()
   })
 })

@@ -18,6 +18,7 @@ from idp.domain.validation import FieldState, Issue, Outcome, ValidationContext,
 from idp.infrastructure.db.models import (
     DocumentPage,
     DocumentPart,
+    EnrichmentResult,
     ExtractedField,
     ExtractionResult,
     SchemaVersion,
@@ -88,6 +89,12 @@ async def validate_part(
                 else:
                     ctx.fields[f.path] = state
             ctx.rows = {k: list(v.values()) for k, v in rows.items()}
+            enrichment = await session.execute(
+                select(EnrichmentResult.name, EnrichmentResult.status).where(
+                    EnrichmentResult.part_id == part.id, EnrichmentResult.job_id == part.job_id
+                )
+            )
+            ctx.enrichment = {row.name: row.status for row in enrichment}
             issues.extend(evaluate(ctx))
 
     await session.execute(

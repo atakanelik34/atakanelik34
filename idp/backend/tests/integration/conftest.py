@@ -13,6 +13,7 @@ from idp.application.jobs import JobRunner, JobScheduler, JobSweeper
 from idp.application.policy import StaticPolicyResolver
 from idp.application.steps.classify import ClassifyStep
 from idp.application.steps.digitize import DigitizeStep
+from idp.application.steps.enrich import EnrichStep
 from idp.application.steps.extract import ExtractStep
 from idp.application.steps.probe import ProbeStep
 from idp.application.steps.review import ReviewStep
@@ -26,6 +27,8 @@ from idp.domain.routing import PolicySnapshot
 from idp.infrastructure.db.repositories import UserRepository
 from idp.main import create_app
 from idp.providers.digitization.local import HybridDigitizer
+from idp.providers.enrichment.master_data import MasterDataProvider
+from idp.providers.enrichment.mock_erp import MockERPProvider
 from idp.providers.extraction.key_value import KeyValueExtractor
 from idp.providers.extraction.regex_extractor import RegexExtractor
 from idp.providers.extraction.table import TableExtractor
@@ -165,6 +168,10 @@ def default_handlers(
         ExtractStep(
             storage=container.storage,
             providers=[RegexExtractor(), KeyValueExtractor(), TableExtractor()],
+            policy=StaticPolicyResolver(PolicySnapshot()),
+        ),
+        EnrichStep(
+            providers={"master_data": MasterDataProvider(), "mock_erp": MockERPProvider()},
             policy=StaticPolicyResolver(PolicySnapshot()),
         ),
         ValidateStep(),

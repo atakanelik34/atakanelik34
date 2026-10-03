@@ -24,6 +24,7 @@ from idp.application.jobs import JobRunner, JobScheduler, JobSweeper
 from idp.application.policy import DbPolicyResolver, default_policy
 from idp.application.steps.classify import ClassifyStep
 from idp.application.steps.digitize import DigitizeStep
+from idp.application.steps.enrich import EnrichStep
 from idp.application.steps.extract import ExtractStep
 from idp.application.steps.probe import ProbeStep
 from idp.application.steps.review import ReviewStep
@@ -38,6 +39,10 @@ from idp.infrastructure.queue.redis import WorkerHeartbeat, arq_redis_settings, 
 from idp.infrastructure.storage.factory import create_storage
 from idp.providers.catalog import extraction_providers
 from idp.providers.digitization.local import HybridDigitizer
+from idp.providers.enrichment.factory import (
+    close_enrichment_providers,
+    create_enrichment_providers,
+)
 from idp.providers.llm.classifier import LLMClassifier
 from idp.providers.llm.factory import create_llm_gateway
 from idp.providers.ocr.factory import create_ocr_engine
@@ -74,6 +79,8 @@ async def build_handlers(settings: Settings, ctx: dict[str, Any]) -> dict[str, S
     gateway = create_llm_gateway(settings)
     ctx["llm_gateway"] = gateway
     policy = DbPolicyResolver(default_policy(settings))
+    enrichment = create_enrichment_providers(settings)
+    ctx["enrichment_providers"] = enrichment
     log.info("worker.llm_providers", providers=gateway.provider_names)
     log.info("worker.ocr_engine", engine=ocr.name if ocr else "not_configured")
     steps: list[StepHandler] = [
@@ -93,6 +100,11 @@ async def build_handlers(settings: Settings, ctx: dict[str, Any]) -> dict[str, S
                 reset_after_seconds=settings.breaker_reset_seconds,
             ),
             provider_timeout_seconds=settings.provider_timeout_seconds,
+        ),
+        EnrichStep(
+            providers=enrichment,
+            policy=policy,
+            timeout_seconds=settings.enrichment_timeout_seconds,
         ),
         ValidateStep(),
         ReviewStep(),
@@ -141,6 +153,8 @@ async def shutdown(ctx: dict[str, Any]) -> None:
         closable.close()
     if "llm_gateway" in ctx:
         await ctx["llm_gateway"].aclose()
+    if "enrichment_providers" in ctx:
+        await close_enrichment_providers(ctx["enrichment_providers"])
     await ctx["app_redis"].aclose()
     await ctx["engine"].dispose()
     log.info("worker.stopped", worker_id=presence.worker_id)

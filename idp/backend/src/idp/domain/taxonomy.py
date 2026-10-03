@@ -120,11 +120,40 @@ class ClassificationRules(_Strict):
     min_score: float = Field(default=0.5, ge=0, le=1)
 
 
+CONNECTION_KEY_PATTERN = r"^[a-z][a-z0-9_-]{0,62}$"
+ATTRIBUTE_PATTERN = r"^[a-z][a-z0-9_]{0,62}$"
+
+
+class EnrichmentRule(_Strict):
+    """Look up a business entity (e.g. the vendor) in a configured connection.
+
+    `match` maps lookup attributes (`tax_id`, `iban`, `name`, `key`, or any
+    attribute the connection understands) to extracted field paths. `outputs`
+    selects the record attributes kept in the result (empty = all).
+    """
+
+    name: str = Field(pattern=NAME_PATTERN)
+    connection: str = Field(pattern=CONNECTION_KEY_PATTERN)
+    entity: str = Field(default="vendor", pattern=ATTRIBUTE_PATTERN)
+    match: dict[str, str] = Field(min_length=1, max_length=10)
+    outputs: list[str] = Field(default_factory=list, max_length=50)
+    min_score: float = Field(default=0.85, ge=0.5, le=1)
+
+    @field_validator("match")
+    @classmethod
+    def _attributes(cls, match: dict[str, str]) -> dict[str, str]:
+        for attribute in match:
+            if not regex.fullmatch(ATTRIBUTE_PATTERN, attribute):
+                raise ValueError(f"invalid lookup attribute '{attribute}'")
+        return match
+
+
 class SchemaDefinition(_Strict):
     fields: list[FieldDefinition] = Field(default_factory=list)
     # Cross-field rules, e.g. {"type": "sum", "params": {"total": "total", "parts": [...]}}.
     rules: list[RuleSpec] = Field(default_factory=list, max_length=50)
     classification: ClassificationRules = Field(default_factory=ClassificationRules)
+    enrichment: list[EnrichmentRule] = Field(default_factory=list, max_length=10)
 
     @model_validator(mode="after")
     def _unique(self) -> Self:
@@ -153,6 +182,22 @@ class SchemaDefinition(_Strict):
             for ref in rule.params.get("terms", []):
                 if ref not in known:
                     raise ValueError(f"rules[{i}] refers to unknown field '{ref}'")
+        return self
+
+    @model_validator(mode="after")
+    def _enrichment_refs(self) -> Self:
+        names = [e.name for e in self.enrichment]
+        if len(names) != len(set(names)):
+            raise ValueError("enrichment names must be unique")
+        known = {path for path, _ in self.flatten()}
+        for e in self.enrichment:
+            for path in e.match.values():
+                if path not in known or "[]" in path:
+                    raise ValueError(f"enrichment '{e.name}' matches on unknown field '{path}'")
+        for i, rule in enumerate(self.rules):
+            name = rule.params.get("enrichment")
+            if rule.type == "lookup" and name not in names:
+                raise ValueError(f"rules[{i}] refers to unknown enrichment '{name}'")
         return self
 
     def flatten(self) -> list[tuple[str, FieldDefinition]]:

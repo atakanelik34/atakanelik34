@@ -23,6 +23,7 @@ from idp.infrastructure.db.models import (
     DocumentPage,
     DocumentPart,
     DocumentType,
+    EnrichmentResult,
     ExtractedField,
     ExtractionResult,
     ProcessingJob,
@@ -154,8 +155,34 @@ class ResultService:
                     "details": v.details,
                 }
             )
+        enrichments = (
+            await self._session.scalars(
+                select(EnrichmentResult)
+                .where(EnrichmentResult.job_id == job_id)
+                .order_by(EnrichmentResult.name)
+            )
+        ).all()
+        by_part_enrichment: dict[uuid.UUID, list[dict[str, Any]]] = defaultdict(list)
+        for e in enrichments:
+            by_part_enrichment[e.part_id].append(
+                {
+                    "name": e.name,
+                    "connection": e.connection_key,
+                    "provider": e.provider,
+                    "status": e.status,
+                    "record_key": e.record_key,
+                    "score": e.score,
+                    "matched_on": e.matched_on,
+                    "criteria": e.criteria,
+                    "outputs": e.outputs,
+                    "candidates": e.candidates,
+                    "is_mock": e.is_mock,
+                    "message": e.message,
+                }
+            )
         for r in results:
             r.sections["validation"] = by_part_validation.get(r.part.id, [])
+            r.sections["enrichment"] = by_part_enrichment.get(r.part.id, [])
         return results
 
     async def processing_result(

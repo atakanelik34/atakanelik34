@@ -7,6 +7,11 @@ from idp.infrastructure.db.models.documents import (
     ProcessingJob,
     ProcessingStep,
 )
+from idp.infrastructure.db.models.enrichment import (
+    Connection,
+    EnrichmentResult,
+    MasterDataRecord,
+)
 from idp.infrastructure.db.models.evaluation import (
     EvaluationDataset,
     EvaluationItem,
@@ -25,15 +30,18 @@ from idp.infrastructure.db.models.taxonomy import (
 
 __all__ = [
     "AuditLog",
+    "Connection",
     "Document",
     "DocumentPage",
     "DocumentPart",
     "DocumentType",
+    "EnrichmentResult",
     "EvaluationDataset",
     "EvaluationItem",
     "EvaluationRun",
     "ExtractedField",
     "ExtractionResult",
+    "MasterDataRecord",
     "ProcessingJob",
     "ProcessingPolicy",
     "ProcessingStep",

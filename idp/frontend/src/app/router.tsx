@@ -6,6 +6,8 @@ import { RequireAuth } from '@/features/auth/RequireAuth'
 import { DashboardPage } from '@/features/dashboard/DashboardPage'
 import { DocumentDetailPage } from '@/features/documents/DocumentDetailPage'
 import { DocumentsPage } from '@/features/documents/DocumentsPage'
+import { ConnectionDetailPage } from '@/features/enrichment/ConnectionDetailPage'
+import { ConnectionsPage } from '@/features/enrichment/ConnectionsPage'
 import { DatasetPage } from '@/features/evaluation/DatasetPage'
 import { EvaluationPage } from '@/features/evaluation/EvaluationPage'
 import { ProcessingPage } from '@/features/processing/ProcessingPage'
@@ -41,6 +43,8 @@ export const routes = [
       { path: 'workflows', element: <WorkflowsPage /> },
       { path: 'providers', element: <ProvidersPage /> },
       { path: 'evaluation', element: <EvaluationPage /> },
+      { path: 'connections', element: <ConnectionsPage /> },
+      { path: 'connections/:id', element: <ConnectionDetailPage /> },
       { path: 'evaluation/:id', element: <DatasetPage /> },
       { path: 'users', element: <UsersPage /> },
       { path: 'settings', element: <SettingsPage /> },

@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardTitle } from '@/components/ui/card'
 import { ErrorNotice, Skeleton } from '@/components/ui/feedback'
 import { hasPermission, useMe } from '@/features/auth/api'
+import { EnrichmentPanel } from '@/features/enrichment/EnrichmentPanel'
 import { FieldsPanel } from '@/features/extraction/FieldsPanel'
 import type { FieldValue, PartResult } from '@/features/extraction/types'
 import { useAddRow, useClaim, useDeleteRow, useReview, type ReviewPart } from '@/features/review/api'
@@ -37,7 +38,7 @@ function asPartResult(part: ReviewPart): PartResult {
       ]),
     ),
     validation: part.validation,
-    enrichment: [],
+    enrichment: part.enrichment,
     actions: [],
   }
 }
@@ -171,6 +172,12 @@ export function ReviewWorkspacePage() {
                 <CardTitle>Validation</CardTitle>
               </CardHeader>
               <ValidationPanel part={part} onSelectPath={selectPath} />
+              {part.enrichment.length > 0 ? (
+                <div className="border-t border-border">
+                  <p className="px-4 pt-3 text-[11px] font-semibold tracking-wide text-muted uppercase">Lookups</p>
+                  <EnrichmentPanel outcomes={part.enrichment} />
+                </div>
+              ) : null}
             </Card>
           ))}
           {editable ? (

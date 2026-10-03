@@ -55,8 +55,23 @@ export interface PartResult {
   fields: Record<string, FieldValue>
   tables: Record<string, { row_id: string; cells: Record<string, FieldValue> }[]>
   validation: ValidationOutcome[]
-  enrichment: Record<string, unknown>[]
+  enrichment: EnrichmentOutcome[]
   actions: Record<string, unknown>[]
+}
+
+export interface EnrichmentOutcome {
+  name: string
+  connection: string
+  provider: string
+  status: 'matched' | 'not_found' | 'ambiguous' | 'skipped' | 'not_configured' | 'error'
+  record_key: string | null
+  score: number | null
+  matched_on: string[]
+  criteria: Record<string, string>
+  outputs: Record<string, unknown>
+  candidates: { key: string; name: string; score: number; matched_on: string[] }[]
+  is_mock: boolean
+  message: string
 }
 
 export interface ProviderAttempt {

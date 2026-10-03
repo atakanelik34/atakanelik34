@@ -16,6 +16,7 @@ from idp.api.middleware import CORRELATION_HEADER, RequestContextMiddleware
 from idp.api.routes import (
     audit,
     auth,
+    connections,
     documents,
     evaluation,
     health,
@@ -83,6 +84,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api.include_router(audit.router)
     api.include_router(evaluation.router)
     api.include_router(processing.router)
+    api.include_router(connections.router)
     api.include_router(system.router)
     if settings.storage_backend is StorageBackend.LOCAL:
         api.include_router(storage_routes.router)

@@ -135,6 +135,13 @@ class Settings(BaseSettings):
     # Development only: a labelled mock LLM that never invents values.
     mock_llm_enabled: bool = False
 
+    # --- Enrichment (phase 10) -----------------------------------------------------
+    # Hosts REST connections may call (comma-separated). Empty: REST lookups disabled.
+    enrichment_allowed_hosts: str = ""
+    enrichment_timeout_seconds: float = Field(default=15.0, gt=0)
+    master_data_max_import_bytes: int = Field(default=5 * 1024 * 1024, ge=1024)
+    master_data_max_rows: int = Field(default=50_000, ge=1)
+
     @staticmethod
     def _hosts(raw: str) -> frozenset[str]:
         return frozenset(h.strip().lower() for h in raw.split(",") if h.strip())
@@ -142,6 +149,10 @@ class Settings(BaseSettings):
     @property
     def llm_allowed_host_set(self) -> frozenset[str]:
         return self._hosts(self.llm_allowed_hosts)
+
+    @property
+    def enrichment_allowed_host_set(self) -> frozenset[str]:
+        return self._hosts(self.enrichment_allowed_hosts)
 
     @property
     def llm_local_host_set(self) -> frozenset[str]:

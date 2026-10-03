@@ -47,6 +47,15 @@ INVOICE = {
         "first_page_markers": ["invoice number", "invoice no", "rechnungsnummer", "invoice date"],
         "min_score": 0.6,
     },
+    # Vendor lookup: reports "not configured" until a `vendors` connection exists.
+    "enrichment": [
+        {
+            "name": "vendor",
+            "connection": "vendors",
+            "entity": "vendor",
+            "match": {"tax_id": "vendor_tax_number", "iban": "iban", "name": "vendor_name"},
+        }
+    ],
     "fields": [
         _f(
             "vendor_name",

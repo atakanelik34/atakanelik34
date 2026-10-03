@@ -20,6 +20,7 @@ import { PartsCard } from '@/features/documents/PartsCard'
 import { ProcessingTimeline } from '@/features/documents/ProcessingTimeline'
 import { DocumentStatusBadge } from '@/features/documents/StatusBadges'
 import { ACTIVE_STATUSES, REPROCESSABLE, type DocumentDetail, type Page } from '@/features/documents/types'
+import { EnrichmentPanel } from '@/features/enrichment/EnrichmentPanel'
 import { useProcessingResult } from '@/features/extraction/api'
 import { FieldsPanel } from '@/features/extraction/FieldsPanel'
 import type { FieldValue } from '@/features/extraction/types'
@@ -262,6 +263,12 @@ export function DocumentDetailPage() {
                     </div>
                   </CardHeader>
                   <FieldsPanel part={part} selectedId={selectedField?.id ?? null} onSelect={selectField} />
+                  {part.enrichment.length > 0 ? (
+                    <div className="border-t border-border">
+                      <p className="px-4 pt-3 text-[11px] font-semibold tracking-wide text-muted uppercase">Lookups</p>
+                      <EnrichmentPanel outcomes={part.enrichment} />
+                    </div>
+                  ) : null}
                   {isRouteTrace(part.extraction?.route_trace) ? (
                     <details className="border-t border-border px-4 py-3">
                       <summary className="cursor-pointer text-xs font-medium">How this was extracted</summary>

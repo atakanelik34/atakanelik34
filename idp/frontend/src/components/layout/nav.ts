@@ -38,7 +38,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: 'Dashboard', icon: LayoutDashboard, to: '/' },
       { label: 'Documents', icon: FileText, to: '/documents', permission: 'documents:read' },
-      { label: 'Inbox', icon: Inbox, plannedPhase: 10 },
+      { label: 'Inbox', icon: Inbox, plannedPhase: 11 },
       { label: 'Processing', icon: Activity, to: '/processing', permission: 'documents:read' },
       { label: 'Review queue', icon: ClipboardCheck, to: '/reviews', permission: 'reviews:read' },
     ],
@@ -48,7 +48,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: 'Document types', icon: Shapes, to: '/document-types', permission: 'config:read' },
       { label: 'Workflows', icon: Workflow, to: '/workflows', permission: 'config:read' },
-      { label: 'Connections', icon: Plug, plannedPhase: 10 },
+      { label: 'Connections', icon: Plug, to: '/connections', permission: 'config:read' },
       { label: 'Providers & models', icon: Cpu, to: '/providers', permission: 'config:read' },
       { label: 'Evaluation', icon: FlaskConical, to: '/evaluation', permission: 'config:read' },
     ],

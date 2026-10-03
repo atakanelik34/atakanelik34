@@ -39,11 +39,19 @@ INGEST_V5 = WorkflowDefinition(
     steps=("probe", "digitize", "classify", "extract", "validate", "review"),
 )
 
-DEFAULT_WORKFLOW = INGEST_V5
+# Phase 10: enrichment between extraction and validation (lookup rules need it).
+INGEST_V6 = WorkflowDefinition(
+    key="ingest",
+    version=6,
+    steps=("probe", "digitize", "classify", "extract", "enrich", "validate", "review"),
+)
+
+DEFAULT_WORKFLOW = INGEST_V6
 
 # Old versions stay registered: jobs pinned to them must still run unchanged.
 _REGISTRY: dict[tuple[str, int], WorkflowDefinition] = {
-    (w.key, w.version): w for w in (INGEST_V1, INGEST_V2, INGEST_V3, INGEST_V4, INGEST_V5)
+    (w.key, w.version): w
+    for w in (INGEST_V1, INGEST_V2, INGEST_V3, INGEST_V4, INGEST_V5, INGEST_V6)
 }
 
 

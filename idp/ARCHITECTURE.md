@@ -785,7 +785,7 @@ latency/doc. Human review corrections feed new ground truth.
 | **7** Human review ✅ | Review queue, workspace (viewer + fields + validation), bbox highlight, edit/accept/reject/approve/send-back, audit read API | full HITL loop |
 | **8** Routing ✅ | Router, signals, route trace, fallback, circuit breaker, cost tracking, workflow versions, evaluation datasets | route trace visible in timeline |
 | **9** LLM ✅ | Gateway, OpenAI-compatible/Anthropic/Ollama adapters, structured output, policy enforcement, token/cost accounting | LOCAL_ONLY provably blocks cloud |
-| **10** Enrichment | REST/DB connectors, mock SAP/ERP, vendor lookup tool | enrichment results stored |
+| **10** Enrichment ✅ | REST/DB connectors, mock SAP/ERP, vendor lookup tool | enrichment results stored |
 | **11** Actions | Webhook, email, mock ERP action, authorisation, idempotent action runs, event outbox (first consumer), API keys for machine ingestion | actions only when workflow allows |
 | **12** Hardening | Tenant RLS, separate migration/runtime DB roles, API rate limits, OpenTelemetry, Prometheus, backups, sandboxed parsers, non-root nginx, image digests + resource limits, production manifests, ClamAV adapter, security review | prod checklist |
 
@@ -978,4 +978,36 @@ revisited deliberately. Deferred items name the phase that owns them.
   the model may only choose a published type key or null; the result is
   capped at 0.6 confidence and labelled `llm:<provider>`. Local providers are
   tried first.
+
+### Phase 10 — Enrichment
+* **Schema-driven**: `SchemaDefinition.enrichment` lists lookups (name,
+  connection key, entity, `match` attribute → field path, `outputs`,
+  `min_score`), so enrichment is versioned with the schema. The invoice
+  template looks vendors up in a connection keyed `vendors`.
+* **Workflow `ingest` v6**: … extract → **enrich** → validate → review.
+  Enrichment runs before validation so the new `lookup` rule (cross-field,
+  `require` defaults to `["matched"]`) can decide whether an unknown vendor
+  needs a human. Without a lookup rule, enrichment is informational.
+* **Matching is ours, not the source's** (`domain/matching.py`): identifiers
+  (key, tax id, IBAN) match exactly after normalisation and a contradicting
+  identifier rules a record out; names match fuzzily after removing case,
+  punctuation and legal forms (score × 0.95, below any identifier hit). Top
+  two within 0.05 → `ambiguous`. REST responses are mapped to records and
+  scored locally.
+* **Connections** (`connections` table, tenant-scoped, audited): `master_data`
+  (CSV import into `master_data_records`; an import replaces one entity's
+  records; size/row limits; audit records counts only), `rest` (config
+  validated at save; host must be in `ENRICHMENT_ALLOWED_HOSTS`; no redirects;
+  credentials only via an `IDP_SECRET_*` environment variable named in the
+  config) and `mock_erp` (fixed, fictitious, labelled demo vendors; refused
+  unless mock providers are allowed).
+* **Never blocks the pipeline**: missing connections (`not_configured`),
+  disabled mocks, timeouts and provider errors (`error`, counted by a
+  per-connection circuit breaker) are recorded in `enrichment_results` and
+  surfaced; validation decides whether they matter. Enrichment is not re-run
+  during review — a reviewer can approve over a failed lookup, which is
+  recorded as an override.
+* **Deferred**: writing enrichment outputs back into extracted fields; they are
+  exposed in the result contract (`enrichment`) and are available to actions
+  (phase 11).
 
