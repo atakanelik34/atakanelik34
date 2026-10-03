@@ -13,8 +13,11 @@ from idp.config import Settings
 from idp.domain.routing import Locality
 from idp.providers.extraction.base import ExtractionProvider
 from idp.providers.extraction.key_value import KeyValueExtractor
+from idp.providers.extraction.llm import LLMExtractor
 from idp.providers.extraction.regex_extractor import RegexExtractor
 from idp.providers.extraction.table import TableExtractor
+from idp.providers.llm.factory import KNOWN_LLM_PROVIDERS, create_llm_gateway
+from idp.providers.llm.gateway import LLMGateway
 from idp.providers.ocr.factory import create_ocr_engine
 
 
@@ -27,16 +30,21 @@ class ProviderDescriptor:
     tier: int | None
     locality: str
     is_mock: bool
-    status: str  # configured | not_configured
+    status: str  # configured | not_configured | host_not_allowed
     cost_per_page: float = 0.0
 
 
-def extraction_providers(settings: Settings) -> list[ExtractionProvider]:
-    del settings  # deterministic providers need no configuration
-    return [RegexExtractor(), KeyValueExtractor(), TableExtractor()]
+def extraction_providers(settings: Settings, gateway: LLMGateway) -> list[ExtractionProvider]:
+    """Deterministic extractors plus one LLM extractor per configured LLM provider."""
+    providers: list[ExtractionProvider] = [RegexExtractor(), KeyValueExtractor(), TableExtractor()]
+    providers.extend(
+        LLMExtractor(gateway, name, max_input_chars=settings.llm_max_input_chars)
+        for name in gateway.provider_names
+    )
+    return providers
 
 
-def describe_providers(settings: Settings) -> list[ProviderDescriptor]:
+async def describe_providers(settings: Settings) -> list[ProviderDescriptor]:
     ocr = create_ocr_engine(settings)
     out = [
         ProviderDescriptor(
@@ -50,7 +58,41 @@ def describe_providers(settings: Settings) -> list[ProviderDescriptor]:
             status="configured" if ocr else "not_configured",
         )
     ]
-    for p in extraction_providers(settings):
+    gateway = create_llm_gateway(settings)
+    for name in KNOWN_LLM_PROVIDERS:
+        if name in gateway.provider_names:
+            llm = gateway.provider(name)
+            out.append(
+                ProviderDescriptor(
+                    kind="llm",
+                    name=name,
+                    version=llm.model,
+                    method="llm",
+                    tier=None,
+                    locality=gateway.effective_locality(name).value,
+                    is_mock=llm.is_mock,
+                    status="configured" if gateway.host_allowed(name) else "host_not_allowed",
+                    cost_per_page=0.0,
+                )
+            )
+        else:
+            out.append(
+                ProviderDescriptor(
+                    kind="llm",
+                    name=name,
+                    version="",
+                    method="llm",
+                    tier=None,
+                    locality=Locality.CLOUD.value if name == "anthropic" else "unknown",
+                    is_mock=name == "mock-llm",
+                    status="not_configured",
+                )
+            )
+    try:
+        extractors = extraction_providers(settings, gateway)
+    finally:
+        await gateway.aclose()  # descriptions only: no calls are made
+    for p in extractors:
         out.append(
             ProviderDescriptor(
                 kind="extraction",
@@ -60,7 +102,7 @@ def describe_providers(settings: Settings) -> list[ProviderDescriptor]:
                 tier=int(p.info.tier),
                 locality=p.info.locality.value,
                 is_mock=p.info.is_mock,
-                status="configured",
+                status="configured" if p.info.configured else "host_not_allowed",
                 cost_per_page=p.info.cost_per_page,
             )
         )

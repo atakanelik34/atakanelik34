@@ -109,6 +109,44 @@ class Settings(BaseSettings):
     breaker_failure_threshold: int = Field(default=5, ge=1)
     breaker_reset_seconds: float = Field(default=60.0, gt=0)
 
+    # --- LLM providers (phase 9) -------------------------------------------------
+    # Providers are deployment configuration (secrets stay in the environment).
+    # A provider is "configured" only when its URL/key and model are set.
+    # Egress allow-list: an LLM host not listed here is never called.
+    llm_allowed_hosts: str = "ollama,localhost,127.0.0.1"
+    # Hosts inside our network. A provider declared local elsewhere counts as cloud.
+    llm_local_hosts: str = "ollama,localhost,127.0.0.1"
+    llm_timeout_seconds: float = Field(default=60.0, gt=0)
+    llm_max_retries: int = Field(default=2, ge=0, le=5)
+    llm_max_input_chars: int = Field(default=24_000, ge=1000)
+    ollama_base_url: str | None = None
+    ollama_model: str | None = None
+    openai_base_url: str | None = None
+    openai_api_key: SecretStr = SecretStr("")
+    openai_model: str | None = None
+    openai_locality: str = Field(default="cloud", pattern="^(local|cloud)$")
+    openai_cost_input_per_1k: float = Field(default=0.0, ge=0)
+    openai_cost_output_per_1k: float = Field(default=0.0, ge=0)
+    anthropic_base_url: str = "https://api.anthropic.com"
+    anthropic_api_key: SecretStr = SecretStr("")
+    anthropic_model: str | None = None
+    anthropic_cost_input_per_1k: float = Field(default=0.0, ge=0)
+    anthropic_cost_output_per_1k: float = Field(default=0.0, ge=0)
+    # Development only: a labelled mock LLM that never invents values.
+    mock_llm_enabled: bool = False
+
+    @staticmethod
+    def _hosts(raw: str) -> frozenset[str]:
+        return frozenset(h.strip().lower() for h in raw.split(",") if h.strip())
+
+    @property
+    def llm_allowed_host_set(self) -> frozenset[str]:
+        return self._hosts(self.llm_allowed_hosts)
+
+    @property
+    def llm_local_host_set(self) -> frozenset[str]:
+        return self._hosts(self.llm_local_hosts)
+
     # --- Auth ---------------------------------------------------------------
     jwt_secret: SecretStr = SecretStr("")
     jwt_algorithm: str = "HS256"

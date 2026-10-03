@@ -54,6 +54,7 @@ class AuditAction(StrEnum):
     EVALUATION_DATASET_DELETED = "evaluation.dataset_deleted"
     EVALUATION_ITEMS_IMPORTED = "evaluation.items_imported"
     EVALUATION_RUN_COMPLETED = "evaluation.run_completed"
+    POLICY_UPDATED = "policy.updated"
 
 
 class AuditEntity(StrEnum):
@@ -65,6 +66,7 @@ class AuditEntity(StrEnum):
     REVIEW_TASK = "review_task"
     EXTRACTED_FIELD = "extracted_field"
     EVALUATION_DATASET = "evaluation_dataset"
+    PROCESSING_POLICY = "processing_policy"
 
 
 def record_audit(

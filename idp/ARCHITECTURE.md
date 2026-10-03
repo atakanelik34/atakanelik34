@@ -784,7 +784,7 @@ latency/doc. Human review corrections feed new ground truth.
 | **6** Validation ✅ | Rule engine + built-ins, per-field thresholds, outcomes | invoice math/IBAN/date rules |
 | **7** Human review ✅ | Review queue, workspace (viewer + fields + validation), bbox highlight, edit/accept/reject/approve/send-back, audit read API | full HITL loop |
 | **8** Routing ✅ | Router, signals, route trace, fallback, circuit breaker, cost tracking, workflow versions, evaluation datasets | route trace visible in timeline |
-| **9** LLM | Gateway, OpenAI-compatible/Anthropic/Ollama adapters, structured output, policy enforcement, token/cost accounting | LOCAL_ONLY provably blocks cloud |
+| **9** LLM ✅ | Gateway, OpenAI-compatible/Anthropic/Ollama adapters, structured output, policy enforcement, token/cost accounting | LOCAL_ONLY provably blocks cloud |
 | **10** Enrichment | REST/DB connectors, mock SAP/ERP, vendor lookup tool | enrichment results stored |
 | **11** Actions | Webhook, email, mock ERP action, authorisation, idempotent action runs, event outbox (first consumer), API keys for machine ingestion | actions only when workflow allows |
 | **12** Hardening | Tenant RLS, separate migration/runtime DB roles, API rate limits, OpenTelemetry, Prometheus, backups, sandboxed parsers, non-root nginx, image digests + resource limits, production manifests, ClamAV adapter, security review | prod checklist |
@@ -941,4 +941,41 @@ revisited deliberately. Deferred items name the phase that owns them.
 * **Deferred**: database-stored, tenant-editable workflow definitions move to
   phase 11, where workflows gain configurable actions; until then workflows are
   the versioned code registry, listed read-only at `GET /workflows`.
+
+### Phase 9 — LLM providers
+* **Port + adapters over plain httpx** (no vendor SDKs): OpenAI-compatible
+  `/chat/completions` (vLLM, LM Studio, hosted APIs), Anthropic Messages,
+  Ollama `/api/chat` with the answer JSON schema as `format`, and a labelled
+  `MockLLMProvider` that answers "nothing found" (it never invents values).
+  Redirects are not followed, so a call cannot leave an allow-listed host.
+* **Provider definitions are deployment configuration** (env, secrets as
+  `SecretStr`), not a database table: API keys never sit in the database. A
+  provider exists only when its URL/key and model are set.
+* **`LLMGateway` is the only way to call a model**: host allow-list
+  (`LLM_ALLOWED_HOSTS`) → policy (locality, LLM allowed, mock allowed) →
+  circuit breaker → bounded retries with backoff + jitter on 429/5xx/timeouts.
+  Effective locality is fail-safe: a provider declared local whose host is not
+  in `LLM_LOCAL_HOSTS` is treated as cloud. Refusals raise
+  `PolicyViolationError` *before* any request is built.
+* **Two independent checks** for local-first: the router never plans a provider
+  the policy forbids, and the gateway refuses it again at call time.
+* **Policies**: tenants keep an append-only, versioned `processing_policies`
+  row (`tenant:manage`, audited). The deployment setting is the ceiling; the
+  effective policy is the tenant's request clamped by it (`clamp_policy`), so a
+  tenant can only be stricter than the server.
+* **Accounting**: every call — ok, failed or refused — becomes a
+  `provider_calls` row (provider, model, locality, purpose, attempts, tokens,
+  cost, latency, error code) with no prompt or response content. Attempt cost
+  in the route trace is the metered cost when calls were made.
+* **LLM extraction** (`providers/extraction/llm.py`): numbered lines in, strict
+  JSON out (`fields` + `rows`, each value with its source line id). Values are
+  normalised with the deterministic rules and grounded: in the cited line →
+  0.80 with bbox; elsewhere in the part → 0.72; not in the text → 0.30 and no
+  bbox (can never pass a threshold unreviewed). Unknown paths are dropped.
+  Prompts mark document text as untrusted; the model's output can only become
+  field candidates.
+* **LLM classification fallback** for parts the rule classifier cannot place:
+  the model may only choose a published type key or null; the result is
+  capped at 0.6 confidence and labelled `llm:<provider>`. Local providers are
+  tried first.
 

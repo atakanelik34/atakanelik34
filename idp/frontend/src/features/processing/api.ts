@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { apiRequest } from '@/lib/api'
 
@@ -8,22 +8,44 @@ export interface ProviderDescriptor {
   version: string
   method: string
   tier: number | null
-  locality: 'local' | 'cloud'
+  locality: 'local' | 'cloud' | 'unknown'
   is_mock: boolean
-  status: 'configured' | 'not_configured'
+  status: 'configured' | 'not_configured' | 'host_not_allowed'
   cost_per_page: number
+}
+
+export type ProcessingMode = 'LOCAL_ONLY' | 'HYBRID' | 'CLOUD_ALLOWED'
+
+export interface Policy {
+  mode: ProcessingMode
+  allow_llm: boolean
+  allow_mock_providers: boolean
+  max_cost_per_document: number | null
+  version: number
+  routing_version: number
 }
 
 export interface ProvidersResponse {
   providers: ProviderDescriptor[]
-  policy: {
-    mode: 'LOCAL_ONLY' | 'HYBRID' | 'CLOUD_ALLOWED'
-    allow_llm: boolean
-    allow_mock_providers: boolean
-    max_cost_per_document: number | null
-    version: number
-    routing_version: number
-  }
+  policy: Policy
+}
+
+export interface PolicyState {
+  requested: Policy
+  effective: Policy
+  ceiling: Policy
+}
+
+export interface UsageRow {
+  provider: string
+  model: string
+  locality: string
+  purpose: string
+  status: string
+  calls: number
+  input_tokens: number
+  output_tokens: number
+  cost: number
 }
 
 export interface WorkflowDefinition {
@@ -74,5 +96,31 @@ export function useJobs(statuses: string[]) {
       return apiRequest<JobSummary[]>(`/jobs?${params}`, { signal })
     },
     refetchInterval: 5_000,
+  })
+}
+
+export function useProviderUsage(days: number) {
+  return useQuery({
+    queryKey: ['providers', 'usage', days],
+    queryFn: ({ signal }) => apiRequest<UsageRow[]>(`/providers/usage?days=${days}`, { signal }),
+  })
+}
+
+export function usePolicy() {
+  return useQuery({
+    queryKey: ['processing-policy'],
+    queryFn: ({ signal }) => apiRequest<PolicyState>('/processing-policy', { signal }),
+  })
+}
+
+export function useUpdatePolicy() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { mode: ProcessingMode; allow_llm: boolean; allow_mock_providers: boolean; max_cost_per_document: number | null }) =>
+      apiRequest<PolicyState>('/processing-policy', { method: 'PUT', body: input }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['processing-policy'] })
+      await queryClient.invalidateQueries({ queryKey: ['providers'] })
+    },
   })
 }

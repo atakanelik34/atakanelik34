@@ -57,16 +57,25 @@ describe('evaluation dataset page', () => {
 })
 
 describe('providers page', () => {
-  it('states the policy and marks unconfigured and mock providers', async () => {
+  it('states the effective policy, marks unconfigured providers, and saves a policy', async () => {
     session.setToken('t')
-    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+    const policy = { mode: 'LOCAL_ONLY', allow_llm: true, allow_mock_providers: false, max_cost_per_document: null, version: 0, routing_version: 1 }
+    let requested: Record<string, unknown> = policy
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
       const url = String(input)
-      if (url.endsWith('/auth/me')) return Promise.resolve(json(ME))
+      if (url.endsWith('/auth/me')) return Promise.resolve(json({ ...ME, permissions: [...ME.permissions, 'tenant:manage'] }))
+      if (url.endsWith('/processing-policy')) {
+        if (init?.method === 'PUT') requested = { ...policy, ...JSON.parse(init.body as string), version: 1 }
+        return Promise.resolve(json({ requested, effective: { ...requested, mode: 'LOCAL_ONLY' }, ceiling: policy }))
+      }
+      if (url.includes('/providers/usage')) {
+        return Promise.resolve(json([{ provider: 'ollama', model: 'llama3.1:8b', locality: 'local', purpose: 'extraction', status: 'ok', calls: 3, input_tokens: 1200, output_tokens: 90, cost: 0 }]))
+      }
       return Promise.resolve(
         json({
-          policy: { mode: 'LOCAL_ONLY', allow_llm: true, allow_mock_providers: false, max_cost_per_document: null, version: 0, routing_version: 1 },
+          policy,
           providers: [
-            { kind: 'ocr', name: 'none', version: '', method: 'ocr', tier: null, locality: 'local', is_mock: false, status: 'not_configured', cost_per_page: 0 },
+            { kind: 'llm', name: 'anthropic', version: '', method: 'llm', tier: null, locality: 'cloud', is_mock: false, status: 'not_configured', cost_per_page: 0 },
             { kind: 'extraction', name: 'regex-extractor', version: '1', method: 'regex', tier: 0, locality: 'local', is_mock: false, status: 'configured', cost_per_page: 0 },
           ],
         }),
@@ -76,6 +85,13 @@ describe('providers page', () => {
     expect(await screen.findByText(/never leaves this deployment/)).toBeInTheDocument()
     expect(screen.getByText('Provider not configured')).toBeInTheDocument()
     expect(screen.getByText('deterministic')).toBeInTheDocument()
+    expect(await screen.findByText('1,200 / 90')).toBeInTheDocument()
+
+    await userEvent.selectOptions(screen.getByLabelText('Mode'), 'CLOUD_ALLOWED')
+    await userEvent.click(screen.getByRole('button', { name: 'Save policy' }))
+    const put = fetchSpy.mock.calls.find(([, i]) => i?.method === 'PUT')
+    expect(JSON.parse(put?.[1]?.body as string)).toMatchObject({ mode: 'CLOUD_ALLOWED', allow_llm: true })
+    expect(await screen.findByText(/Limited by the deployment/)).toBeInTheDocument()
     session.clear()
   })
 })

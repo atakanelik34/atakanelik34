@@ -28,7 +28,8 @@ per document by a routing engine that respects a local-first data policy.
 | 6 | Validation: rule registry (field + cross-field), required/confidence checks, stored outcomes | ✅ |
 | 7 | Human review: review queue, workspace (viewer + fields + validation + evidence), corrections, approve/reject/send-back, audit log UI | ✅ |
 | 8 | Routing: signal-based router with policy enforcement, staged fallback, circuit breakers, cost tracking, route trace; evaluation datasets/runs; processing monitor, workflows, providers and evaluation UI | ✅ |
-| 9–12 | LLM → enrichment → actions → production hardening | in progress ([roadmap](ARCHITECTURE.md#16-phased-implementation-plan)) |
+| 9 | LLM: gateway (allow-list, policy, retries, breaker, usage), OpenAI-compatible/Anthropic/Ollama adapters + labelled mock, grounded LLM extraction, LLM classification fallback, tenant processing policy | ✅ |
+| 10–12 | Enrichment → actions → production hardening | in progress ([roadmap](ARCHITECTURE.md#16-phased-implementation-plan)) |
 
 The UI shows planned sections in the navigation as disabled with their phase
 number; nothing in the product is simulated.
@@ -137,6 +138,26 @@ validated at startup by `backend/src/idp/config.py`:
   storage and wildcard CORS.
 * `JWT_SECRET` must be ≥ 32 characters; the process will not start otherwise.
 * Secrets are never logged; `.env` is git-ignored and written with mode `600`.
+
+### Processing policy and LLM providers
+
+* `PROCESSING_MODE` (default `LOCAL_ONLY`) is the deployment ceiling; tenants
+  can set a stricter policy under *Providers & models*. In `LOCAL_ONLY`, no
+  document content is sent to a cloud provider — the router and the LLM gateway
+  both refuse it.
+* LLMs are optional. Without one, extraction is deterministic and anything
+  uncertain goes to human review. To add a local model:
+
+  ```bash
+  # .env: OLLAMA_BASE_URL=http://ollama:11434  OLLAMA_MODEL=llama3.1:8b
+  docker compose --profile llm up -d
+  docker compose exec ollama ollama pull llama3.1:8b
+  docker compose up -d worker
+  ```
+
+* Cloud models additionally need their host in `LLM_ALLOWED_HOSTS`
+  (e.g. `api.anthropic.com`) and a tenant policy that allows cloud processing.
+  Usage and cost per provider are shown on the *Providers & models* page.
 
 ## Security notes (phase 1)
 

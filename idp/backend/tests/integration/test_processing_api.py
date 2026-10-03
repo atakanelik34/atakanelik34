@@ -19,7 +19,14 @@ async def test_provider_catalog_states_policy_and_unconfigured_providers(
     assert by_name["table-extractor"]["status"] == "configured"
     ocr = next(p for p in body["providers"] if p["kind"] == "ocr")
     assert ocr["status"] in {"configured", "not_configured"}
-    assert all(p["locality"] == "local" for p in body["providers"])
+    assert all(p["locality"] == "local" for p in body["providers"] if p["status"] == "configured")
+    llms = {p["name"]: p["status"] for p in body["providers"] if p["kind"] == "llm"}
+    assert llms == {
+        "ollama": "not_configured",
+        "openai-compatible": "not_configured",
+        "anthropic": "not_configured",
+        "mock-llm": "not_configured",
+    }
 
 
 async def test_workflows_and_job_monitor(

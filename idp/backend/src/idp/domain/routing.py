@@ -66,6 +66,24 @@ class PolicySnapshot:
         return locality is Locality.LOCAL or self.mode is not ProcessingMode.LOCAL_ONLY
 
 
+_MODE_ORDER = (ProcessingMode.LOCAL_ONLY, ProcessingMode.HYBRID, ProcessingMode.CLOUD_ALLOWED)
+
+
+def clamp_policy(requested: PolicySnapshot, ceiling: PolicySnapshot) -> PolicySnapshot:
+    """A tenant policy can only be as permissive as the deployment allows."""
+    mode = min(requested.mode, ceiling.mode, key=_MODE_ORDER.index)
+    limits = [
+        c for c in (requested.max_cost_per_document, ceiling.max_cost_per_document) if c is not None
+    ]
+    return PolicySnapshot(
+        mode=mode,
+        allow_llm=requested.allow_llm and ceiling.allow_llm,
+        allow_mock_providers=requested.allow_mock_providers and ceiling.allow_mock_providers,
+        max_cost_per_document=min(limits) if limits else None,
+        version=requested.version,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class PageSignal:
     page_number: int

@@ -39,6 +39,7 @@ from idp.infrastructure.db.models import (
     DocumentType,
     ExtractedField,
     ExtractionResult,
+    ProviderCall,
     SchemaVersion,
 )
 from idp.infrastructure.layout_store import load_layout
@@ -148,6 +149,7 @@ class ExtractStep:
                 name=p.info.name,
                 tier=p.info.tier,
                 locality=p.info.locality,
+                configured=p.info.configured,
                 is_mock=p.info.is_mock,
                 circuit_open=self._breakers.is_open(p.info.name),
                 cost_per_page=p.info.cost_per_page,
@@ -167,6 +169,7 @@ class ExtractStep:
         if not breaker.allow():
             return [], {"provider": name, "status": "circuit_open"}
         started = time.monotonic()
+        calls_before = len(context.calls)
         try:
             found = await asyncio.wait_for(provider.extract(context), self._timeout)
         except Exception as exc:
@@ -179,7 +182,14 @@ class ExtractStep:
                 "duration_ms": round((time.monotonic() - started) * 1000),
             }
         breaker.record_success()
-        cost = round(provider.info.cost_per_page * len(context.layouts), 6)
+        # Actual model cost when the provider made metered calls, else the estimate.
+        metered = [c for c in context.calls[calls_before:] if name == f"llm:{c.provider}"]
+        cost = round(
+            sum(c.cost for c in metered)
+            if metered
+            else provider.info.cost_per_page * len(context.layouts),
+            6,
+        )
         return found, {
             "provider": name,
             "version": provider.info.version,
@@ -229,6 +239,7 @@ class ExtractStep:
                 layouts=tuple(
                     layouts[n] for n in range(part.page_start, part.page_end + 1) if n in layouts
                 ),
+                policy=policy,
             )
             plan = self._routing.plan(
                 _signals(pages, part, doc_type.key if doc_type else None, schema),
@@ -240,6 +251,7 @@ class ExtractStep:
             failed += sum(
                 1 for s in stages for a in s["attempts"] if a["status"] in {"failed", "timeout"}
             )
+            self._record_calls(ctx, context)
             merged = merge(schema, candidates)
             trace = {**plan.trace(), "stages": stages, "estimated_cost": cost}
             result = ExtractionResult(
@@ -282,6 +294,29 @@ class ExtractStep:
                 "estimated_cost": round(total_cost, 6),
             },
         )
+
+    @staticmethod
+    def _record_calls(ctx: StepContext, context: ExtractionContext) -> None:
+        """Model usage and cost, per call (no prompt or response content)."""
+        for call in context.calls:
+            ctx.session.add(
+                ProviderCall(
+                    tenant_id=ctx.document.tenant_id,
+                    document_id=ctx.document.id,
+                    job_id=ctx.job.id,
+                    provider=call.provider,
+                    model=call.model,
+                    locality=call.locality,
+                    purpose=call.purpose,
+                    status=call.status,
+                    attempts=call.attempts,
+                    input_tokens=call.input_tokens,
+                    output_tokens=call.output_tokens,
+                    cost=call.cost,
+                    latency_ms=call.latency_ms,
+                    error_code=call.error_code,
+                )
+            )
 
     async def _run_stages(
         self,

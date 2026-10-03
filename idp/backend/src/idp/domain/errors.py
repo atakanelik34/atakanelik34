@@ -128,3 +128,9 @@ class UnsupportedMediaTypeError(DocumentError):
 
 class DuplicateDocumentError(ConflictError):
     code = "duplicate_document"
+
+
+class PolicyViolationError(BusinessError):
+    """A call the tenant's processing policy (or the deployment) does not permit."""
+
+    code = "policy_violation"

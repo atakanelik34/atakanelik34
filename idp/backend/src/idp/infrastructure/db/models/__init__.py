@@ -14,6 +14,7 @@ from idp.infrastructure.db.models.evaluation import (
 )
 from idp.infrastructure.db.models.extraction import ExtractedField, ExtractionResult
 from idp.infrastructure.db.models.identity import Project, Tenant, User
+from idp.infrastructure.db.models.policy import ProcessingPolicy, ProviderCall
 from idp.infrastructure.db.models.review import ReviewAction, ReviewTask, ValidationResult
 from idp.infrastructure.db.models.taxonomy import (
     DocumentPart,
@@ -34,8 +35,10 @@ __all__ = [
     "ExtractedField",
     "ExtractionResult",
     "ProcessingJob",
+    "ProcessingPolicy",
     "ProcessingStep",
     "Project",
+    "ProviderCall",
     "ReviewAction",
     "ReviewTask",
     "SchemaField",
