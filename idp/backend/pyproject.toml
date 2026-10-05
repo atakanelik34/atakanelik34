@@ -43,7 +43,7 @@ dev = [
     "ruff>=0.7",
     "mypy>=1.13",
     "moto[s3]>=5.0",
-    "types-boto3>=1.35",
+    "types-boto3[s3]>=1.35",
     "types-regex>=2024.9",
 ]
 
