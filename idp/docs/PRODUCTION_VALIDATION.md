@@ -10,6 +10,64 @@ that is **expected to fail** until the gap is closed.
 
 ---
 
+## 0. Autonomous validation: 16 production scenarios
+
+The 16 required scenarios run **unattended** in two layers. Both are in the
+repository and run nightly and on demand (`.github/workflows/idp-validation.yml`):
+
+1. **Fault-injection suite.** `backend/tests/integration/validation/`, run with
+   `pytest -m validation`. It drives the real job runner, leases, retries,
+   sweeper, steps, API and Postgres RLS. Only the edges are faked, and they are
+   scripted to be slow, crash or time out: the OCR engine, the model server and
+   the ERP receiver. Large, high-page and malicious documents are generated, and
+   the memory, CPU and scratch disk of the process tree are sampled. Known
+   defects are **strict expected failures**: the run fails as soon as one is
+   fixed, so the expectation is updated rather than going stale.
+2. **Live-stack checks.** `scripts/validation/stack_validation.py` runs black-box
+   against the real Compose deployment: nginx → API as `idp_app` → worker
+   containers. It samples container CPU and RAM with `docker stats` and checks
+   RLS as the runtime database role.
+
+Results are written as JSON and rendered into
+[`docs/validation/RESULTS.md`](validation/RESULTS.md) with
+`scripts/validation/render_report.py`.
+
+| # | Scenario | Automated tests | Result (2026-10-05 run) | Key measurement |
+|---|---|---|---|---|
+| 1 | Upload rate-limit enforcement | `test_upload_rate_limit_is_enforced_per_principal`, `test_api_rate_limit_still_bounds_upload_floods` | ❌ **F1 confirmed** (xfail) | Limit 5/min: 8 of 8 uploads accepted. Only the general API limit bounds uploads. |
+| 2 | Concurrent upload flood | `test_concurrent_upload_flood`; stack check 2 | ✅ | 200 concurrent uploads in-process: 200 × 201, p95 2.6 s, each job dispatched once. Through nginx: 125 concurrent, 40/s, p95 3.0 s, no errors. |
+| 3 | Large PDF | `test_large_pdf_near_the_upload_limit`, `test_pdf_over_the_upload_limit_is_refused_without_storing`; stack checks 3 | ✅ | 46 MB scanned PDF: upload 0.4 s, digitize 5.9 s, peak RSS +176 MiB. 85 MB: 413 at the edge, nothing stored. |
+| 4 | High-page-count PDF | `test_high_page_count_native_pdf[100/500/1000]`, `test_page_count_above_the_limit_fails_cleanly`, `test_render_time_budget_breach_fails_fast`; stack check 4 | ✅ to 1,000 pages; ❌ **F15** (xfail) | About 107 ms/page at 150 dpi: 500 pages in 53 s, 1,000 pages in 108 s against a 120 s parser timeout. Effective ceiling is about 1,100 pages, not 2,000. 2,001 pages fail once, cleanly. |
+| 5 | Slow OCR | `test_slow_ocr_within_the_lease_completes`, `test_transient_ocr_failure_retries_the_step` | ✅ | Sequential: 4 pages × 0.5 s = 3.4 s. A transient OCR error retries the step and recovers. |
+| 6 | OCR timeout + job lease interaction | `test_ocr_longer_than_lease_is_fenced_and_retried_by_another_worker`, `test_step_that_always_outlasts_the_lease_is_dead_lettered`, `test_scanned_page_count_vs_ocr_time_budget` | ✅ fencing; ❌ **F2 confirmed** (xfail) | When the lease expires mid-OCR, the second worker takes over and the first is fenced (`lost_lease`). Cost: 4 wasted OCR calls, no duplicate rows. A step that always outlasts its lease was claimed 5 times with `max_attempts=3` and stays RUNNING forever. At 10 s/30 s per page of OCR, the 900 s lease fits about 88/29 scanned pages. |
+| 7 | Worker crash during OCR | `test_worker_crash_during_ocr_recovers` | ✅ | Crash mid-OCR: job stays RUNNING, a live lease can't be stolen; after expiry the stale step is marked `worker_lost`, digitize re-runs once, probe isn't redone. |
+| 8 | Lease expiry during processing | `test_lease_expiry_without_contention_is_harmless`, plus #6 | ✅ | Without contention the slow worker still completes; with contention it is fenced. |
+| 9 | Retry after lease expiry | `test_sweeper_redispatches_expired_leases`, #6, #7 | ✅ (unbounded, see F2) | The sweeper re-dispatches expired leases, and the next worker re-claims and finishes. |
+| 10 | Duplicate processing / idempotency | `test_concurrent_deliveries_of_one_job_run_it_once`, `test_concurrent_identical_uploads_keep_one_document`, `test_concurrent_identical_uploads_answer_409_not_500`; ERP tests in #16 | ✅ data; ❌ **F12** (xfail) | 5 concurrent deliveries: 1 execution. 20 identical concurrent uploads: 1 document and 1 job, but race losers get **500** (`MissingGreenlet`) instead of 409. |
+| 11 | Dead-letter behaviour | `test_retryable_failures_dead_letter_and_replay_recovers`, `test_non_retryable_failure_fails_immediately` | ✅ | retry, retry, dead_lettered after 3 attempts; earlier steps checkpointed; audited; the sweeper doesn't resurrect it; replay recovers; non-retryable errors fail after 1 attempt. |
+| 12 | Resource exhaustion | `test_resource_exhaustion_inputs_fail_safely[png bomb / giant page / corrupted]`, `test_render_memory_bomb_fails_fast` | ✅ worker survives; ❌ **F16** (xfail) | A 3.6 G-pixel PNG bomb fails once (`document_error`). A giant-page render bomb is stopped by the 2 GiB parser cap and the worker stays healthy, but it is classified `internal_error`, retried 3 times and dead-lettered. |
+| 13 | CPU / RAM under concurrent documents | `test_cpu_and_ram_under_concurrent_documents`; stack check 13 | ✅ | In-process, 12 mixed documents with 4 concurrent: peak RSS 496 MiB, about 2 cores, scratch 43 MiB. Compose, 102 documents: worker peak 580 MiB of 3 GiB (19%), CPU peak 197%, mean 97%; API peak 166 MiB; 60 docs/min. |
+| 14 | Tenant isolation under load | `test_tenant_isolation_under_concurrent_load`; stack checks 14 (API + DB) | ✅ | RLS forced on all tables during a concurrent 2-tenant workload with workers running: 0 leaks over 60 cross-tenant reads and 40 listings. Stack: 0 leaks over 75 cross reads; as `idp_app`, no context returns 0 rows, foreign rows are invisible, and `UPDATE audit_logs` is refused. |
+| 15 | LLM timeout / retry interaction | `test_llm_transient_timeouts_are_retried_within_the_call`, `test_llm_retries_are_bounded_by_the_provider_timeout`, `test_llm_breaker_opens_after_repeated_timeouts`, `test_llm_call_cut_by_the_provider_timeout_is_still_metered` | ✅; ❌ **F13** (xfail) | 2 timeouts then success: 1 usage record with `attempts=3`. Gateway retries are cut at the 1.5 s provider timeout and the document goes to review, not FAILED. The breaker opens after 2 failures. A call cut by the timeout leaves **no** usage record. |
+| 16 | ERP timeout / retry interaction | `test_erp_timeout_is_retried_with_the_same_idempotency_key`, `test_erp_timeouts_exhaust_retries_into_dead_letter`, `test_erp_rejection_is_not_retried`, `test_replay_after_erp_timeouts_keeps_the_idempotency_key` | ✅; ❌ **F14** (xfail) | Timeout then retry: 2 requests, 1 key, posted once and recorded. 3 timeouts: dead-lettered, document FAILED, run left `approved`. HTTP 400: FAILED after 1 attempt. A replay after dead-letter sends a **new** idempotency key (2 keys over 4 requests). |
+
+**Summary of this run:**
+* Fault-injection suite: 30 passed, 7 expected failures (all known defects).
+* Live stack: 8/8 checks passed.
+* Default suite unchanged: 345 passed.
+
+**How to run**
+
+```bash
+# fault injection (needs Postgres + Redis, as for the integration tests)
+cd backend && TEST_DATABASE_URL=… TEST_REDIS_URL=… pytest -m validation -rx
+# live stack (stack up via docker compose; uses the backend venv for httpx)
+backend/.venv/bin/python scripts/validation/stack_validation.py --uploads 100 --pages 500
+python3 scripts/validation/render_report.py      # → docs/validation/RESULTS.md
+```
+
+---
+
 ## 1. What is already proven, and what is not
 
 | Evidence | Covers | Does **not** cover |
@@ -22,8 +80,8 @@ that is **expected to fail** until the gap is closed.
 
 | # | Finding | Severity | Validation |
 |---|---|---|---|
-| F1 | `upload_limiter` is constructed in `container.py` but never applied. `UPLOAD_RATE_LIMIT_PER_MINUTE` has no effect, though README, `.env.example` and SECURITY.md describe it. | **High** (doc/behaviour mismatch on an abuse control) | SEC-12 (expected to fail) |
-| F2 | Time budget: the digitize step OCRs pages **sequentially** (120 s timeout per page, no total cap); the whole-document render/extract call shares one 120 s limit. The job lease (900 s) is renewed only at step start, and the arq function timeout equals the lease. Long scanned documents can exceed the lease → re-claim/retry → dead-letter. | **High** | PERF-03, PERF-04 |
+| F1 | **Confirmed by test.** `upload_limiter` is constructed in `container.py` but never applied. `UPLOAD_RATE_LIMIT_PER_MINUTE` has no effect, though README, `.env.example` and SECURITY.md describe it. | **High** (doc/behaviour mismatch on an abuse control) | SEC-12 (expected to fail) |
+| F2 | **Confirmed by test.** Re-claims after lease expiry ignore `max_attempts`, so the job loops forever. Time budget: the digitize step OCRs pages **sequentially** (120 s timeout per page, no total cap); the whole-document render/extract call shares one 120 s limit. The job lease (900 s) is renewed only at step start, and the arq function timeout equals the lease. Long scanned documents can exceed the lease → re-claim/retry → dead-letter. | **High** | PERF-03, PERF-04 |
 | F3 | Worker `/tmp` is a 1 GiB tmpfs (RAM). It counts against the 3 GiB memory limit, together with up to `WORKER_MAX_JOBS=4` parse pools rendering at 300 dpi. | Medium | PERF-05 |
 | F4 | The image with Tesseract and the `clamav` service have never run end to end. | **High** | DEP-02, PIPE-03, SEC-09 |
 | F5 | RLS is tested with the table owner forcing policies. It has not been tested by attacking the real `idp_app` role (wrong/absent `app.tenant_id`, direct SQL). | Medium | SEC-02 |
@@ -32,8 +90,14 @@ that is **expected to fail** until the gap is closed.
 | F8 | Evaluation runs execute inside the HTTP request (≤ 1,000 items). nginx `proxy_read_timeout` is 120 s, so a large run can return 504 while the server finishes. | Low | PERF-08 |
 | F9 | Confidence bases (regex 0.92, key/value 0.85, table 0.82, LLM 0.80) and field thresholds are uncalibrated. | **High** for business acceptance | ACC-01..04 |
 | F10 | LLM structured-output quality, latency and cost are only tested against mocks. Circuit breakers are per worker process. | Medium | LLM-03..06, RES-06 |
+| F12 | Concurrent identical uploads: the losers of the race read an expired ORM object after rollback and get **500** instead of 409. Data integrity holds: 1 document, 1 job. | Medium | Scenario 10 (xfail) |
+| F13 | An LLM call cut off by the extract provider timeout is never recorded in `provider_calls`, so its usage and cost are not metered. | Medium | Scenario 15 (xfail) |
+| F14 | Replaying a job that was dead-lettered by ERP timeouts creates a new action run with a **new idempotency key**. An ERP that did process a timed-out request cannot deduplicate the replay, so a business posting can be duplicated. | **High** | Scenario 16 (xfail) |
+| F15 | A parser timeout on a valid, large document is deterministic but is retried 3 times and then dead-lettered. The effective native-page ceiling (about 1,100 pages at 150 dpi on the test hardware) is far below `PROBE_MAX_PAGES=2000`. | **High** | Scenario 4 (xfail) |
+| F16 | A render that exceeds the parser memory cap is classified `internal_error` (retryable), so it is retried 3 times and dead-lettered instead of failing once. The worker itself is protected. | Medium | Scenario 12 (xfail) |
+| O1 | Compose sets no memory limit for Postgres (observed: 16 GiB host limit). | Low | Set in production |
 
-**Go-live rule:** F1, F2, F4, F6 and F9 must be resolved, or formally accepted with a
+**Go-live rule:** F1, F2, F4, F6, F9, F14 and F15 must be resolved, or formally accepted with a
 documented limit (for example "maximum 15 scanned pages per document"), before the
 go/no-go meeting.
 

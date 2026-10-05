@@ -11,3 +11,8 @@ backend/var/
 frontend/node_modules/
 frontend/dist/
 dump.rdb
+
+# Validation run outputs
+validation-report.json
+stack-validation-report.json
+.e2e-override.yml
