@@ -40,6 +40,28 @@ async def _visible_users(session, tenant: str) -> list[uuid.UUID]:  # type: igno
     return list((await session.execute(text("SELECT DISTINCT tenant_id FROM users"))).scalars())
 
 
+async def _as_policy_subject(session) -> None:  # type: ignore[no-untyped-def]
+    """Make the policies apply to this transaction (rolled back by the caller).
+
+    A table owner is exempt unless FORCE is set; a superuser (the CI service
+    container's user) is exempt even then, so in that case switch to a throwaway
+    non-superuser role, as the runtime role idp_app is.
+    """
+    superuser = await session.scalar(
+        text("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
+    )
+    if superuser:
+        await session.execute(text("CREATE ROLE rls_probe NOLOGIN NOSUPERUSER NOBYPASSRLS"))
+        await session.execute(text("GRANT SELECT, UPDATE ON users, tenants TO rls_probe"))
+        await session.execute(text("SET LOCAL ROLE rls_probe"))
+    else:
+        await session.execute(text("ALTER TABLE users FORCE ROW LEVEL SECURITY"))
+        await session.execute(text("ALTER TABLE tenants FORCE ROW LEVEL SECURITY"))
+    assert await session.scalar(
+        text("SELECT NOT rolbypassrls FROM pg_roles WHERE rolname = current_user")
+    )
+
+
 async def test_policies_isolate_tenants_for_non_owner_roles(
     container: Container, acme: TenantFixture
 ) -> None:
@@ -49,10 +71,7 @@ async def test_policies_isolate_tenants_for_non_owner_roles(
         globex_id = await session.scalar(
             text("SELECT id FROM tenants WHERE slug = :s"), {"s": globex.slug}
         )
-        # The test user owns the tables; FORCE applies the policies to it inside this
-        # transaction only (rolled back below), as they apply to the runtime role.
-        await session.execute(text("ALTER TABLE users FORCE ROW LEVEL SECURITY"))
-        await session.execute(text("ALTER TABLE tenants FORCE ROW LEVEL SECURITY"))
+        await _as_policy_subject(session)
         assert await _visible_users(session, str(acme_id)) == [acme_id]
         assert set(await _visible_users(session, "*")) == {acme_id, globex_id}
         assert await _visible_users(session, "") == []  # unset: fail closed
