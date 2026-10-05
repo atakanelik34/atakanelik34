@@ -16,4 +16,7 @@ dump.rdb
 validation-report.json
 calibration-report.json
 stack-validation-report.json
+clamav-validation-report.json
+restore-drill-report.json
+stack-benchmark-report.json
 .e2e-override.yml

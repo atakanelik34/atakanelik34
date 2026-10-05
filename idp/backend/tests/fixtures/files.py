@@ -256,3 +256,38 @@ def scan_like_pdf(lines: list[str], *, dpi: int = 300, skew_degrees: float = 1.2
     buffer = io.BytesIO()
     page.convert("RGB").save(buffer, format="PDF", resolution=dpi, quality=60)
     return buffer.getvalue()
+
+
+# The EICAR anti-virus test string: harmless by design, detected by every scanner.
+EICAR = rb"X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
+
+
+def eicar_pdf() -> bytes:
+    """A valid PDF carrying EICAR as an embedded file.
+
+    It passes the PDF allow-list (a bare EICAR file is refused with 415 before
+    any scan), and ClamAV extracts the embedded stream and reports
+    `Eicar-Signature`. That is the malware path through the real upload API.
+    """
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R"
+        b" /Names << /EmbeddedFiles << /Names [(eicar.com) 5 0 R] >> >> >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>",
+        b"<< /Length %d >>\nstream\n" % len(EICAR) + EICAR + b"\nendstream",
+        b"<< /Type /Filespec /F (eicar.com) /EF << /F 4 0 R >> >>",
+    ]
+    out = io.BytesIO()
+    out.write(b"%PDF-1.7\n")
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(out.tell())
+        out.write(f"{number} 0 obj\n".encode() + body + b"\nendobj\n")
+    xref = out.tell()
+    out.write(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode())
+    for offset in offsets:
+        out.write(f"{offset:010d} 00000 n \n".encode())
+    out.write(
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    )
+    return out.getvalue()

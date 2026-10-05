@@ -71,6 +71,46 @@ async def test_per_principal_rate_limit(
     assert int(limited.headers["Retry-After"]) >= 1
 
 
+async def test_api_key_uploads_cannot_bypass_the_scanner(
+    client: httpx.AsyncClient, acme: TenantFixture, container: Container
+) -> None:
+    """Machine ingestion (API key) goes through the same scan as interactive uploads."""
+    headers = await login(client, acme.owner_email, acme.owner_password)
+    token = (await client.post("/api/v1/api-keys", headers=headers, json={"name": "mfp"})).json()[
+        "token"
+    ]
+    machine = {"Authorization": f"Bearer {token}"}
+    container.scanner = FixedScanner(ScanVerdict(ScanStatus.INFECTED, "clamav", "Eicar-Signature"))
+    assert (await upload(client, machine, files.eicar_pdf())).status_code == 422
+    container.scanner = FixedScanner(None)
+    assert (await upload(client, machine, files.native_pdf())).status_code == 503
+    assert (await client.get("/api/v1/documents", headers=headers)).json()["items"] == []
+
+
+def test_documents_enter_only_through_the_scanning_ingestion_service() -> None:
+    """Structural guard: one ingestion path, and it scans before anything is stored."""
+    import ast
+    import inspect
+    from pathlib import Path
+
+    from idp.application import ingestion
+
+    src = Path(ingestion.__file__).resolve().parents[1]
+    constructors = [
+        str(p.relative_to(src))
+        for p in src.rglob("*.py")
+        if "IngestionService(" in p.read_text() and p.name != "ingestion.py"
+    ]
+    assert constructors == ["api/routes/documents.py"]
+    tree = ast.parse(inspect.getsource(ingestion.IngestionService.ingest).strip())
+    lines = {
+        n.func.attr: n.lineno
+        for n in sorted(ast.walk(tree), key=lambda n: getattr(n, "lineno", 0), reverse=True)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+    }  # first occurrence of each call wins
+    assert lines["scan"] < lines["put"]  # scanned before stored
+
+
 async def test_upload_rate_limit_is_enforced_per_principal(
     client: httpx.AsyncClient, acme: TenantFixture, container: Container
 ) -> None:
