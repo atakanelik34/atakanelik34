@@ -2,8 +2,17 @@
 
 Only actions declared in the part's schema (`SchemaDefinition.actions`) can
 run, against connections the tenant configured — there is no other way to
-cause an external side effect. Each (job, part, action) is one `ActionRun`
-with a deterministic idempotency key.
+cause an external side effect. Each (job, part, action) is one `ActionRun`.
+
+* The idempotency key names the *logical* action — document, page range,
+  action name — not the job, so retries, replays and reprocessing of the same
+  document all send the same `Idempotency-Key` (F14). Once one run of a key
+  has succeeded, later runs never call the target again: they are recorded as
+  succeeded with `deduplicated_from_id` pointing at the run that executed
+  (decided at planning, re-checked under a per-key advisory lock right before
+  execution). A partial unique index allows only one executing success per key.
+  If a worker dies after the target accepted but before the outcome was
+  recorded, the next attempt resends the same key and the target deduplicates.
 
 * Actions needing approval (the default) pause the job: document
   READY_FOR_ACTION until someone with `actions:execute` approves or rejects
@@ -12,8 +21,7 @@ with a deterministic idempotency key.
   action's result in its own transaction while holding the run's row lock, an
   intentional exception to "steps never commit" — an external side effect must
   never be forgotten because a later action failed. A retried or concurrent
-  attempt finds the run already succeeded and skips it; receivers get the same
-  `Idempotency-Key` should a crash ever leave an outcome unrecorded.
+  attempt finds the run already succeeded and skips it.
 * Transient failures retry the job; permanent refusals fail it (replayable);
   a missing connection or disabled mock fails it with a configuration error.
 """
@@ -26,7 +34,8 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from idp.application.audit import ActorType, AuditAction, AuditEntity, record_audit
 from idp.application.outbox import emit
@@ -157,10 +166,11 @@ class ActionStep:
                 continue
             action_ctx = await self._context(ctx, part)
             for spec in specs:
-                key = f"{ctx.job.id}:{part.id}:{spec.name}"
+                key = logical_key(ctx.document.id, part, spec.name)
                 run = existing.get(key)
                 if run is None:
                     connection = await self._connection(ctx, spec.connection)
+                    executed = await _executed(ctx.session, ctx.document.tenant_id, key)
                     run = ActionRun(
                         tenant_id=ctx.document.tenant_id,
                         document_id=ctx.document.id,
@@ -177,6 +187,8 @@ class ActionStep:
                         response={},
                         is_mock=bool(connection and connection.kind == "mock_erp"),
                     )
+                    if executed is not None:
+                        _mark_deduplicated(run, executed)
                     ctx.session.add(run)
                 runs.append(run)
         await ctx.session.flush()
@@ -235,6 +247,17 @@ class ActionStep:
         run = await session.get(ActionRun, run_id, with_for_update=True, populate_existing=True)
         if run is None or run.status != "approved":
             await session.commit()  # someone else executed or decided it
+            return
+        # Serialise every executor of this logical action (other jobs included),
+        # then look for one that already executed it.
+        await session.execute(
+            select(func.pg_advisory_xact_lock(func.hashtextextended(run.idempotency_key, 0)))
+        )
+        executed = await _executed(session, run.tenant_id, run.idempotency_key)
+        if executed is not None:
+            _mark_deduplicated(run, executed)
+            await session.commit()
+            log.info("action.deduplicated", action=run.name, executed_run=str(executed.id))
             return
         name, key = run.name, run.connection_key  # rollback expires ORM state
         connection = await self._connection(ctx, key)
@@ -310,6 +333,32 @@ class ActionStep:
             aggregate_id=run.document_id,
             payload={"document_id": str(run.document_id), "action_run_id": str(run.id), **details},
         )
+
+
+def logical_key(document_id: Any, part: DocumentPart, action: str) -> str:
+    """Stable across every job of the document: the key receivers deduplicate on."""
+    return f"{document_id}:p{part.page_start}-{part.page_end}:{action}"
+
+
+async def _executed(session: AsyncSession, tenant_id: Any, key: str) -> ActionRun | None:
+    """The run that executed this logical action successfully, if any."""
+    return await session.scalar(
+        select(ActionRun).where(
+            ActionRun.tenant_id == tenant_id,
+            ActionRun.idempotency_key == key,
+            ActionRun.status == "succeeded",
+            ActionRun.deduplicated_from_id.is_(None),
+        )
+    )
+
+
+def _mark_deduplicated(run: ActionRun, executed: ActionRun) -> None:
+    run.status = "succeeded"
+    run.deduplicated_from_id = executed.id
+    run.external_reference = executed.external_reference
+    run.executed_at = executed.executed_at
+    run.response = {"deduplicated_from": str(executed.id)}
+    run.error_code = None
 
 
 class ApproveActionsStep(ActionStep):

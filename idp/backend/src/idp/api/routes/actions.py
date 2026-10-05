@@ -47,6 +47,7 @@ class ActionRunOut(BaseModel):
     decided_at: datetime | None
     decision_note: str | None
     executed_at: datetime | None
+    deduplicated_from_id: uuid.UUID | None
     created_at: datetime
 
 
@@ -69,6 +70,7 @@ def _run(r: ActionRun) -> ActionRunOut:
         decided_at=r.decided_at,
         decision_note=r.decision_note,
         executed_at=r.executed_at,
+        deduplicated_from_id=r.deduplicated_from_id,
         created_at=r.created_at,
     )
 

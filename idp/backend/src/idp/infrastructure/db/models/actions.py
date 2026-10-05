@@ -30,11 +30,25 @@ class ApiKey(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base):
 
 
 class ActionRun(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base):
-    """One configured business action for one part in one job. Idempotent by key."""
+    """One configured business action for one part in one job.
+
+    `idempotency_key` names the *logical* action (document, page range, action
+    name), so every job of a document — retries, replays, reprocessing — sends
+    the same key and finds earlier executions. At most one run per key actually
+    executes successfully; later runs of an executed action point at it through
+    `deduplicated_from_id` instead of calling the target again.
+    """
 
     __tablename__ = "action_runs"
     __table_args__ = (
-        Index("uq_action_runs_idempotency_key", "idempotency_key", unique=True),
+        Index("uq_action_runs_job_key", "job_id", "idempotency_key", unique=True),
+        Index(
+            "uq_action_runs_executed_key",
+            "tenant_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("status = 'succeeded' AND deduplicated_from_id IS NULL"),
+        ),
         Index("ix_action_runs_document", "document_id", "created_at"),
     )
 
@@ -70,6 +84,10 @@ class ActionRun(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     decision_note: Mapped[str | None] = mapped_column(Text)
     executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # the run that actually executed this logical action (set on replays)
+    deduplicated_from_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("action_runs.id", ondelete="SET NULL")
+    )
 
 
 class OutboxEvent(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base):

@@ -1,9 +1,11 @@
 """Business actions (approval, execution, idempotency), outbox relay, API keys."""
 
+import asyncio
 import hashlib
 import hmac
 import json
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -16,7 +18,8 @@ from idp.application.steps.action import ActionStep, ApproveActionsStep
 from idp.container import Container
 from idp.domain.identity import Role
 from idp.domain.routing import PolicySnapshot
-from idp.infrastructure.db.models import ActionRun, OutboxEvent
+from idp.infrastructure.db.models import ActionRun, OutboxEvent, ProcessingJob
+from idp.providers.actions.base import ActionError
 from idp.providers.actions.mock_erp import MockERPActionProvider
 from idp.providers.actions.webhook import WebhookActionProvider, WebhookSender
 from tests.fixtures import files
@@ -330,3 +333,194 @@ async def test_api_keys_for_machine_ingestion(
     assert (await client.get("/api/v1/documents", headers=machine)).status_code == 401
     forged = {"Authorization": f"Bearer {token[:-2]}xx"}
     assert (await client.get("/api/v1/documents", headers=forged)).status_code == 401
+
+
+class Erp:
+    """An ERP honouring `Idempotency-Key`: one posting per key, 409 + same id on repeats."""
+
+    def __init__(self) -> None:
+        self.postings: dict[str, str] = {}
+        self.requests: list[httpx.Request] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        key = request.headers["Idempotency-Key"]
+        if key in self.postings:
+            return httpx.Response(409, json={"id": self.postings[key]})
+        self.postings[key] = f"ERP-{len(self.postings) + 1}"
+        return httpx.Response(201, json={"id": self.postings[key]})
+
+    def provider(self) -> WebhookActionProvider:
+        sender = WebhookSender(
+            allowed_hosts=frozenset({"hooks.example.test"}),
+            client=httpx.AsyncClient(transport=httpx.MockTransport(self)),
+        )
+        return WebhookActionProvider(sender)
+
+
+class LostAck:
+    """Delivers to the ERP, then loses the answer: the ERP posted, the worker never knows.
+
+    `mode="reset"` drops the connection (a transient error the job retries);
+    `mode="crash"` kills the worker before it can record anything.
+    """
+
+    kind, is_mock = "webhook", False
+
+    def __init__(self, inner: WebhookActionProvider, *, times: int, mode: str = "reset") -> None:
+        self.inner, self.times, self.mode = inner, times, mode
+        self.crashed = asyncio.Event()
+
+    def configured(self) -> bool:
+        return True
+
+    async def execute(self, connection, request):  # type: ignore[no-untyped-def]
+        outcome = await self.inner.execute(connection, request)
+        if self.times <= 0:
+            return outcome
+        self.times -= 1
+        if self.mode == "crash":
+            self.crashed.set()
+            await asyncio.Event().wait()  # the worker dies here
+        raise ActionError("connection_reset", transient=True)
+
+
+async def _due(container: Container, job_id: uuid.UUID, *, expire_lease: bool = False) -> None:
+    async with container.session_factory() as session:
+        job = await session.get(ProcessingJob, job_id)
+        assert job is not None
+        job.next_attempt_at = None
+        if expire_lease:
+            job.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        await session.commit()
+
+
+async def _runs(container: Container) -> list[ActionRun]:
+    async with container.session_factory() as session:
+        return list((await session.scalars(select(ActionRun).order_by(ActionRun.created_at))).all())
+
+
+async def _replay(client: httpx.AsyncClient, headers: dict[str, str], doc_id: str) -> uuid.UUID:
+    response = await client.post(f"/api/v1/documents/{doc_id}/process", headers=headers)
+    assert response.status_code == 202, response.text
+    return uuid.UUID(response.json()["id"])
+
+
+async def test_lost_erp_acknowledgement_then_retry_and_replay_post_once(
+    client: httpx.AsyncClient,
+    owner: dict[str, str],
+    container: Container,
+    make_runner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:  # type: ignore[no-untyped-def]
+    """F14: the ERP posts, the acknowledgement is lost; retry and replay never post again."""
+    monkeypatch.setenv("IDP_SECRET_HOOK", "hook-secret")
+    await _configure(client, owner, kind="webhook", requires_approval=False)
+    erp = Erp()
+    steps = _steps({"webhook": LostAck(erp.provider(), times=1)})
+    body = (await upload(client, owner, files.clean_invoice_pdf())).json()
+    job_id, doc_id = uuid.UUID(body["job_id"]), body["document"]["id"]
+
+    assert await make_runner(steps).run(job_id) is RunOutcome.RETRY_SCHEDULED
+    assert len(erp.postings) == 1  # the ERP did post; the worker does not know
+    await _due(container, job_id)
+    assert await make_runner(steps).run(job_id) is RunOutcome.SUCCEEDED
+    [run] = await _runs(container)
+    assert (run.status, run.external_reference) == ("succeeded", "ERP-1")
+
+    replay = await _replay(client, owner, doc_id)
+    assert await make_runner(steps).run(replay) is RunOutcome.SUCCEEDED
+    first, second = await _runs(container)
+    assert len(erp.postings) == 1
+    assert len(erp.requests) == 2  # the replay did not even call the ERP
+    assert second.status == "succeeded" and second.external_reference == "ERP-1"
+    assert second.attempts == 0 and second.deduplicated_from_id == first.id
+    assert second.idempotency_key == first.idempotency_key
+
+
+async def test_lost_erp_acknowledgement_until_dead_letter_then_replay_posts_once(
+    client: httpx.AsyncClient,
+    owner: dict[str, str],
+    container: Container,
+    make_runner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:  # type: ignore[no-untyped-def]
+    """F14: every attempt posts but loses the answer; the replay reuses the ERP's posting."""
+    monkeypatch.setenv("IDP_SECRET_HOOK", "hook-secret")
+    await _configure(client, owner, kind="webhook", requires_approval=False)
+    erp = Erp()
+    steps = _steps({"webhook": LostAck(erp.provider(), times=99)})
+    body = (await upload(client, owner, files.clean_invoice_pdf())).json()
+    job_id, doc_id = uuid.UUID(body["job_id"]), body["document"]["id"]
+    outcome = RunOutcome.RETRY_SCHEDULED
+    while outcome is RunOutcome.RETRY_SCHEDULED:
+        outcome = await make_runner(steps).run(job_id)
+        await _due(container, job_id)
+    assert outcome is RunOutcome.DEAD_LETTERED
+    assert len(erp.requests) == 3 and len(erp.postings) == 1
+
+    healthy = _steps({"webhook": erp.provider()})
+    replay = await _replay(client, owner, doc_id)
+    assert await make_runner(healthy).run(replay) is RunOutcome.SUCCEEDED
+    assert len(erp.postings) == 1
+    assert len({r.headers["Idempotency-Key"] for r in erp.requests}) == 1
+    _, second = await _runs(container)
+    assert (second.status, second.external_reference) == ("succeeded", "ERP-1")
+    # And once recorded, a further replay does not call the ERP at all.
+    calls = len(erp.requests)
+    assert await make_runner(healthy).run(await _replay(client, owner, doc_id)) in {
+        RunOutcome.SUCCEEDED
+    }
+    assert len(erp.requests) == calls and len(erp.postings) == 1
+
+
+async def test_worker_crash_after_erp_posting_then_retry_and_replay_post_once(
+    client: httpx.AsyncClient,
+    owner: dict[str, str],
+    container: Container,
+    make_runner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:  # type: ignore[no-untyped-def]
+    """F14: the worker dies after the ERP posted and before anything was recorded."""
+    monkeypatch.setenv("IDP_SECRET_HOOK", "hook-secret")
+    await _configure(client, owner, kind="webhook", requires_approval=False)
+    erp = Erp()
+    lost = LostAck(erp.provider(), times=1, mode="crash")
+    steps = _steps({"webhook": lost})
+    body = (await upload(client, owner, files.clean_invoice_pdf())).json()
+    job_id, doc_id = uuid.UUID(body["job_id"]), body["document"]["id"]
+    worker = asyncio.create_task(make_runner(steps).run(job_id))
+    await lost.crashed.wait()
+    worker.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await worker
+    [run] = await _runs(container)
+    assert run.status == "approved" and len(erp.postings) == 1  # nothing recorded
+
+    await _due(container, job_id, expire_lease=True)  # the lease runs out; another worker
+    assert await make_runner(steps).run(job_id) is RunOutcome.SUCCEEDED
+    assert await make_runner(steps).run(await _replay(client, owner, doc_id)) is (
+        RunOutcome.SUCCEEDED
+    )
+    assert len(erp.postings) == 1
+    assert len({r.headers["Idempotency-Key"] for r in erp.requests}) == 1
+    assert [r.external_reference for r in await _runs(container)] == ["ERP-1", "ERP-1"]
+
+
+async def test_replay_of_an_executed_action_needs_no_second_approval(
+    client: httpx.AsyncClient, owner: dict[str, str], container: Container, make_runner
+) -> None:  # type: ignore[no-untyped-def]
+    """A replayed document whose action already succeeded neither re-asks nor re-posts."""
+    await _configure(client, owner, kind="mock_erp")
+    steps = _steps({"mock_erp": MockERPActionProvider()})
+    body = (await upload(client, owner, files.clean_invoice_pdf())).json()
+    job_id, doc_id = uuid.UUID(body["job_id"]), body["document"]["id"]
+    assert await make_runner(steps).run(job_id) is RunOutcome.WAITING_FOR_REVIEW
+    await client.post(f"/api/v1/documents/{doc_id}/actions/approve", headers=owner, json={})
+    assert await make_runner(steps).run(job_id) is RunOutcome.SUCCEEDED
+    replay = await _replay(client, owner, doc_id)
+    assert await make_runner(steps).run(replay) is RunOutcome.SUCCEEDED
+    first, second = await _runs(container)
+    assert second.status == "succeeded" and second.attempts == 0
+    assert second.external_reference == first.external_reference
+    assert (await _doc(client, owner, doc_id))["status"] == "COMPLETED"

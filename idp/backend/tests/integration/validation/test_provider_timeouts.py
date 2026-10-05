@@ -256,6 +256,11 @@ async def _action_run(container: Container) -> ActionRun:
     return run
 
 
+async def _all_runs(container: Container) -> list[ActionRun]:
+    async with container.session_factory() as session:
+        return list((await session.scalars(select(ActionRun).order_by(ActionRun.created_at))).all())
+
+
 @pytest.fixture
 async def erp_owner(client, acme, monkeypatch):  # type: ignore[no-untyped-def]
     monkeypatch.setenv("IDP_SECRET_HOOK", "hook-secret")
@@ -338,12 +343,6 @@ async def test_erp_rejection_is_not_retried(
     record("16 ERP rejection", run_status=run.status, error=run.error_code)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="F14: replaying a job dead-lettered by ERP timeouts creates a new action run with a "
-    "new idempotency key (key = job:part:action), so an ERP that did process a timed-out "
-    "request cannot deduplicate the replay",
-)
 async def test_replay_after_erp_timeouts_keeps_the_idempotency_key(
     client, erp_owner, container, runner_factory, record
 ) -> None:  # type: ignore[no-untyped-def]
@@ -359,5 +358,22 @@ async def test_replay_after_erp_timeouts_keeps_the_idempotency_key(
     )
     await runner.run(uuid.UUID(replay.json()["id"]))
     keys = [r.headers["Idempotency-Key"] for r in receiver.requests]
-    record("16 replay after ERP timeouts", requests=len(keys), distinct_keys=len(set(keys)))
+    runs = await _all_runs(container)
+    record(
+        "16 replay after ERP timeouts (F14 fixed)",
+        requests=len(keys),
+        distinct_keys=len(set(keys)),
+        runs=[(r.status, r.attempts) for r in runs],
+    )
+    # The replay resends the same logical key, so an ERP that did process a
+    # timed-out request deduplicates it instead of posting twice.
     assert len(set(keys)) == 1
+    assert [r.status for r in runs] == ["approved", "succeeded"]
+    # A second replay of the now-executed action does not call the ERP at all.
+    again = await client.post(
+        f"/api/v1/documents/{body['document']['id']}/process", headers=erp_owner
+    )
+    await runner.run(uuid.UUID(again.json()["id"]))
+    runs = await _all_runs(container)
+    assert len(receiver.requests) == len(keys)
+    assert runs[-1].deduplicated_from_id == runs[1].id

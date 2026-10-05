@@ -246,7 +246,8 @@ ReviewAction      task_id, actor_id, action: accept|edit|reject|approve|send_bac
                   field_path?, original_value, corrected_value, reason, at
                   — doubles as the feedback dataset for evaluation/fine-tuning
 EnrichmentResult  part_id, job_id, provider, lookup_key, result (jsonb), matched, confidence
-ActionRun         part_id, job_id, action_key, status, idempotency_key UNIQUE, request_ref,
+ActionRun         part_id, job_id, action_key, status, idempotency_key (logical; one executed
+                  success per key), deduplicated_from_id, request_ref,
                   response_ref, error
 ```
 
@@ -1018,8 +1019,9 @@ revisited deliberately. Deferred items name the phase that owns them.
   validated at save. There is no generic execute capability; LLM output can
   never become an action (CLAUDE.md non-negotiable 1).
 * **Workflow `ingest` v7**: … review → `approve_actions` → `action`. The gate
-  plans one `ActionRun` per (job, part, action) with idempotency key
-  `job:part:action` and, when approval is required (default), pauses the job
+  plans one `ActionRun` per (job, part, action) with the *logical* idempotency
+  key `document:p<start>-<end>:action` (the same for every job of the
+  document) and, when approval is required (default), pauses the job
   with the document READY_FOR_ACTION. Approve/reject (`actions:execute`,
   operator+, audited) marks the gate SUCCEEDED and resumes the same job — the
   same mechanism as review approval. Rejected runs are skipped; the document
@@ -1028,7 +1030,12 @@ revisited deliberately. Deferred items name the phase that owns them.
   holding the run's row lock — a deliberate exception to "steps never commit"
   so an external side effect is never forgotten because a later action failed.
   Succeeded runs are never executed again; receivers get the same
-  `Idempotency-Key` on any retry. Transient failures retry the job;
+  `Idempotency-Key` on any retry *and replay*. A run whose logical action
+  already succeeded in an earlier job is recorded as succeeded with
+  `deduplicated_from_id` and never calls the target (checked at planning and
+  again under a per-key advisory lock before execution; a partial unique index
+  admits one executed success per key). An outcome lost to a crash after the
+  target accepted is resolved by resending the same key (F14). Transient failures retry the job;
   permanent refusals and missing/unconfigured/mock-disallowed connections fail
   it (replayable).
 * **Providers**: signed webhook (HMAC-SHA256 over `t.body`, `X-IDP-Signature:
