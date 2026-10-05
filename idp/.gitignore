@@ -14,5 +14,6 @@ dump.rdb
 
 # Validation run outputs
 validation-report.json
+calibration-report.json
 stack-validation-report.json
 .e2e-override.yml
