@@ -4,7 +4,6 @@ import asyncio
 import uuid
 from dataclasses import dataclass
 
-import pytest
 from sqlalchemy import text
 
 from idp.application.jobs import JobSweeper, RunOutcome
@@ -74,13 +73,9 @@ async def test_concurrent_identical_uploads_keep_one_document(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="F12: losing the duplicate-upload race reads an expired ORM object after rollback "
-    "(MissingGreenlet) and answers 500 instead of 409",
-)
+# F12 (fixed): the race loser answers 409, deterministically.
 async def test_concurrent_identical_uploads_answer_409_not_500(
-    client, acme, record, monkeypatch
+    client, acme, container, record, monkeypatch
 ) -> None:  # type: ignore[no-untyped-def]
     """The race loser path, made deterministic: each request's duplicate pre-check misses
     (as when identical uploads pass it before either commits), so every request after the
@@ -100,8 +95,19 @@ async def test_concurrent_identical_uploads_answer_409_not_500(
     data = files.native_pdf(pages=3)
     statuses = [(await upload(client, headers, data)).status_code for _ in range(3)]
     statuses += await _identical_uploads(client, headers, data, 10)
-    record("10 identical uploads: race losers", statuses=sorted(map(str, set(statuses))))
-    assert all(s in (201, 409) for s in statuses), statuses
+    async with container.session_factory() as session:
+        documents = await session.scalar(text("SELECT count(*) FROM documents"))
+        losers = await session.scalar(
+            text("SELECT count(*) FROM audit_logs WHERE action = 'document.duplicate_rejected'")
+        )
+    record(
+        "10 identical uploads: race losers (F12 fixed)",
+        statuses=sorted(map(str, set(statuses))),
+        documents=documents,
+        duplicate_rejections_audited=losers,
+    )
+    assert statuses.count(201) == 1 and statuses.count(409) == len(statuses) - 1, statuses
+    assert documents == 1 and losers == len(statuses) - 1
 
 
 # 11 -------------------------------------------------------------------------------------

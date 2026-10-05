@@ -121,12 +121,12 @@ class IngestionService:
         return project
 
     async def _find_duplicate(
-        self, principal: Principal, project: Project, sha256: str
+        self, principal: Principal, project_id: uuid.UUID, sha256: str
     ) -> uuid.UUID | None:
         return await self._session.scalar(
             select(Document.id).where(
                 Document.tenant_id == principal.tenant_id,
-                Document.project_id == project.id,
+                Document.project_id == project_id,
                 Document.sha256 == sha256,
                 Document.deleted_at.is_(None),
             )
@@ -151,6 +151,8 @@ class IngestionService:
         if not principal.has(Permission.DOCUMENTS_WRITE):
             raise AuthorizationError("Not allowed to upload documents")
         project = await self._resolve_project(principal, incoming.project_key)
+        # Plain value: a rollback (lost duplicate race) expires ORM state (F12).
+        project_id = project.id
 
         fp = await asyncio.to_thread(_fingerprint, incoming.stream, self._max_bytes)
         if fp.size == 0:
@@ -182,7 +184,7 @@ class IngestionService:
             await self._session.commit()
             raise DocumentError("File rejected by malware scanner")
 
-        existing = await self._find_duplicate(principal, project, fp.sha256)
+        existing = await self._find_duplicate(principal, project_id, fp.sha256)
         if existing is not None:
             await self._reject_duplicate(principal, existing)
 
@@ -193,7 +195,7 @@ class IngestionService:
         document = Document(
             id=document_id,
             tenant_id=principal.tenant_id,
-            project_id=project.id,
+            project_id=project_id,
             source=incoming.source.value,
             original_filename=sanitize_filename(incoming.filename),
             declared_mime_type=(incoming.declared_mime_type or None),
@@ -214,7 +216,7 @@ class IngestionService:
             # Lost a race with an identical concurrent upload.
             await self._session.rollback()
             await self._storage.delete(storage_key)
-            existing = await self._find_duplicate(principal, project, fp.sha256)
+            existing = await self._find_duplicate(principal, project_id, fp.sha256)
             if existing is not None:
                 await self._reject_duplicate(principal, existing)
             raise

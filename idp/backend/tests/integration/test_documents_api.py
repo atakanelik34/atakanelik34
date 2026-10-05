@@ -80,6 +80,33 @@ async def test_duplicate_upload_is_rejected_with_existing_id(
     assert len(queue.messages) == 1
 
 
+async def test_losing_the_duplicate_upload_race_answers_409(
+    client: httpx.AsyncClient,
+    owner: dict[str, str],
+    queue: RecordingQueue,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F12: the pre-check misses (both uploads passed it before either committed), so the
+    second one hits the unique constraint; it must answer 409, not 500."""
+    from idp.application.ingestion import IngestionService
+
+    data = files.native_pdf()
+    first = await upload(client, owner, data)
+    original = IngestionService._find_duplicate
+    calls: list[int] = []
+
+    async def race(self, *args):  # type: ignore[no-untyped-def]
+        calls.append(1)
+        return None if len(calls) == 1 else await original(self, *args)
+
+    monkeypatch.setattr(IngestionService, "_find_duplicate", race)
+    second = await upload(client, owner, data)
+    assert len(calls) == 2  # pre-check missed, then the unique-constraint path ran
+    assert second.status_code == 409
+    assert second.json()["details"]["existing_document_id"] == first.json()["document"]["id"]
+    assert len(queue.messages) == 1
+
+
 @pytest.mark.parametrize(
     ("data", "filename", "content_type", "status", "code"),
     [
