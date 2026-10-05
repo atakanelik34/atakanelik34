@@ -176,3 +176,55 @@ async def test_pathological_regex_cannot_hang() -> None:
     layout = _layout([("a" * 60 + "c", 0.1, 0.1)])
     merged = await _run(schema, layout)
     assert merged[0].best is None
+
+
+def _ocr_row_split_layout() -> PageLayout:
+    """How Tesseract reads a totals block: each visual row becomes two lines, the label
+    column and the amount column (observed on the phase 13 scanned fixtures, F17)."""
+    from idp.domain.geometry import Line
+
+    def line(i: int, text: str, x0: float, y0: float) -> Line:
+        words, x = [], x0
+        for t in text.split():
+            words.append(Word(t, BBox(x, y0, x + 0.012 * len(t), y0 + 0.012), 0.95))
+            x += 0.012 * len(t) + 0.008
+        return Line(id=f"p1-l{i}", words=tuple(words))
+
+    lines = [
+        line(0, "INVOICE", 0.12, 0.10),
+        line(1, "Invoice number: INV-2026-22082", 0.12, 0.12),
+        line(2, "Subtotal", 0.605, 0.245),
+        line(3, "17,477.52", 0.78, 0.2455),
+        line(4, "VAT 7%", 0.604, 0.266),
+        line(5, "1,223.43", 0.78, 0.2662),
+        line(6, "Total due", 0.604, 0.286),
+        line(7, "18,700.95 EUR", 0.78, 0.2858),
+        line(8, "IBAN: DE82 3102 6511 4045 5884 57", 0.12, 0.33),
+    ]
+    return PageLayout(
+        page_number=1,
+        width=612,
+        height=792,
+        unit="pt",
+        rotation=0,
+        source=TextSource.OCR,
+        blocks=tuple(group_blocks(lines)),
+    )
+
+
+async def test_ocr_amounts_split_from_their_labels_are_read_on_the_same_row() -> None:
+    """F17: the value of a label alone on its OCR line is on the same visual row to the
+    right - never the VAT rate on the label's line, never the next row's amount."""
+    merged = await _run(TEMPLATES["invoice"].definition, _ocr_row_split_layout())
+    values = {m.path: (m.best.value if m.best else None) for m in merged if not m.row_id}
+    assert values["tax"] == "1223.43"  # not "7" from "VAT 7%"
+    assert values["subtotal"] == "17477.52"  # not the VAT amount on the next row
+    assert values["total"] == "18700.95"
+
+
+def test_a_rate_is_never_returned_as_an_amount() -> None:
+    from idp.providers.extraction.key_value import _value_in
+
+    tax = dict(TEMPLATES["invoice"].definition.flatten())["tax"]
+    assert _value_in(" 7%", tax) is None
+    assert _value_in(" 19% 199.50", tax) is not None  # the amount after the rate still wins

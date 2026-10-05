@@ -57,9 +57,12 @@ def _value_in(text: str, field: FieldDefinition) -> tuple[int, int] | None:
         return None
     match = matches[0]
     if field.type in (FieldType.DECIMAL, FieldType.INTEGER):
-        # "VAT 19% 199.50": a number followed by % is a rate, not the amount.
+        # "VAT 19% 199.50": a number followed by % is a rate, not the amount - and
+        # "VAT 7%" alone has no amount at all (F17: OCR puts it on another line).
         amounts = [m for m in matches if not text[m.end() :].lstrip().startswith("%")]
-        match = amounts[0] if amounts else match
+        if not amounts:
+            return None
+        match = amounts[0]
     start = match.start() + (len(match.group(0)) - len(match.group(0).lstrip()))
     return start, match.end() - (len(match.group(0)) - len(match.group(0).rstrip()))
 
@@ -116,6 +119,13 @@ class KeyValueExtractor:
                             self._make(m, span(line, start, end), layout, "key_value:right", bonus)
                         )
                         continue
+                    if located is None and m.field.extraction_hints.position != "below":
+                        # OCR often splits one visual row into label and value lines
+                        # (F17): take the value from the same row before looking below.
+                        right = self._right_on_row(lines, line, m)
+                        if right is not None:
+                            out.append(self._make(m, right, layout, "key_value:right", bonus))
+                            continue
                     if m.field.extraction_hints.position == "right":
                         continue
                     below = self._below(lines, index, line, m)
@@ -124,6 +134,24 @@ class KeyValueExtractor:
         if ctx.layouts:
             out.extend(self._first_line_heuristic(ctx.layouts[0], fields, out))
         return out
+
+    def _right_on_row(self, lines: list[Line], label_line: Line, m: _Match) -> Span | None:
+        """The nearest line to the right whose vertical centre lies within the label's line."""
+        y0, y1 = label_line.bbox.y0, label_line.bbox.y1
+        row = sorted(
+            (
+                nxt
+                for nxt in lines
+                if nxt is not label_line
+                and nxt.bbox.x0 >= label_line.bbox.x1
+                and y0 <= (nxt.bbox.y0 + nxt.bbox.y1) / 2 <= y1
+            ),
+            key=lambda nxt: nxt.bbox.x0,
+        )
+        if not row:
+            return None
+        located = _value_in(row[0].text, m.field)
+        return span(row[0], located[0], located[1]) if located else None
 
     def _below(self, lines: list[Line], index: int, label_line: Line, m: _Match) -> Span | None:
         label = span(label_line, m.start, m.end)
