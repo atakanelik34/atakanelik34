@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Render validation-report.json (pytest -m validation) and stack-validation-report.json
-(stack_validation.py) into one Markdown results page.
+(stack_validation.py) into one Markdown results page, plus — when present — the phase 13
+reports: clamav-validation-report.json, restore-drill-report.json and
+stack-benchmark-report.json.
 
     python3 scripts/validation/render_report.py [--out docs/validation/RESULTS.md]
 """
@@ -43,6 +45,31 @@ def main() -> None:
         for c in stack["checks"]:
             values = {k: v for k, v in c.items() if k not in ("check", "ok")}
             lines.append(f"| {_cell(c['check'])} | {'PASS' if c['ok'] else 'FAIL'} | {_cell(values)} |")
+        lines.append("")
+    for name, title in (
+        ("clamav-validation-report.json", "ClamAV (clamav_check.py)"),
+        ("restore-drill-report.json", "Backup/restore drill (restore_drill.py)"),
+    ):
+        path = ROOT / name
+        if path.exists():
+            data = json.loads(path.read_text())
+            lines += [f"## {title} — {data['generated_at']}", ""]
+            extra = {k: v for k, v in data.items() if k not in ("checks", "generated_at")}
+            if extra:
+                lines += [f"Run: {_cell(extra)}", ""]
+            lines += ["| Check | Result | Measurements |", "|---|---|---|"]
+            for c in data["checks"]:
+                values = {k: v for k, v in c.items() if k not in ("check", "ok")}
+                lines.append(
+                    f"| {_cell(c['check'])} | {'PASS' if c['ok'] else 'FAIL'} | {_cell(values)} |"
+                )
+            lines.append("")
+    bench = ROOT / "stack-benchmark-report.json"
+    if bench.exists():
+        data = json.loads(bench.read_text())
+        lines += [f"## Stack benchmark (stack_benchmark.py) — {data['generated_at']}", ""]
+        lines += ["| Measure | Value |", "|---|---|"]
+        lines += [f"| {k} | {_cell(v)} |" for k, v in data["summary"].items()]
         lines.append("")
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
