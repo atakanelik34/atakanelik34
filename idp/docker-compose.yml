@@ -297,6 +297,10 @@ services:
   clamav:
     image: clamav/clamav:${CLAMAV_VERSION:-1.4}
     profiles: ["av"]
+    environment:
+      # freshclam daemon checks per day (image default: 1). Needs egress to
+      # database.clamav.net or a private mirror: see GO_LIVE_READINESS.md (ClamAV).
+      FRESHCLAM_CHECKS: ${FRESHCLAM_CHECKS:-12}
     volumes:
       - clamav-db:/var/lib/clamav
     expose: ["3310"]
