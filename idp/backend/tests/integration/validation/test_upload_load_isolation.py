@@ -48,24 +48,20 @@ def _percentile(values: list[float], q: float) -> float:
 
 
 # 1 --------------------------------------------------------------------------------------
-@pytest.mark.xfail(
-    strict=True,
-    reason="F1: upload_limiter is constructed but never applied; UPLOAD_RATE_LIMIT_PER_MINUTE "
-    "has no effect",
-)
+# F1 (fixed): UPLOAD_RATE_LIMIT_PER_MINUTE is enforced per principal.
 async def test_upload_rate_limit_is_enforced_per_principal(client, acme, record) -> None:  # type: ignore[no-untyped-def]
     headers = await login(client, acme.owner_email, acme.owner_password)
     statuses = [
         (await upload(client, headers, _unique_pdf(f"rl-{i}"))).status_code
         for i in range(UPLOAD_LIMIT + 3)
     ]
-    record("1 upload rate limit", limit_per_minute=UPLOAD_LIMIT, statuses=statuses)
+    record("1 upload rate limit (F1 fixed)", limit_per_minute=UPLOAD_LIMIT, statuses=statuses)
     assert statuses[:UPLOAD_LIMIT] == [201] * UPLOAD_LIMIT
     assert set(statuses[UPLOAD_LIMIT:]) == {429}
 
 
 async def test_api_rate_limit_still_bounds_upload_floods(client, acme, container, record) -> None:  # type: ignore[no-untyped-def]
-    """Until F1 is fixed, the general per-principal API limit is the only upload bound."""
+    """The general per-principal API limit also bounds uploads (both limits apply)."""
     headers = await login(client, acme.owner_email, acme.owner_password)
     container.api_limiter._limit = 10
     statuses = [
@@ -80,6 +76,8 @@ async def test_concurrent_upload_flood(
     client, acme, container, queue: RecordingQueue, record
 ) -> None:  # type: ignore[no-untyped-def]
     headers = await login(client, acme.owner_email, acme.owner_password)
+    # A load test of the upload path, not of the limiter (scenario 1 covers that).
+    container.upload_limiter._limit = 10_000
     started = time.perf_counter()
     results = await asyncio.gather(
         *(_timed_upload(client, headers, _unique_pdf(f"flood-{i}")) for i in range(FLOOD))
@@ -144,6 +142,7 @@ async def test_tenant_isolation_under_concurrent_load(
     beta = await bootstrap_tenant(container, "beta")
     ha = await login(client, acme.owner_email, acme.owner_password)
     hb = await login(client, beta.owner_email, beta.owner_password)
+    container.upload_limiter._limit = 10_000  # isolation under load, not the limiter
     await _force_rls(container, True)
     try:
         uploads = await asyncio.gather(

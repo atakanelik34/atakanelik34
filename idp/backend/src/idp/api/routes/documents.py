@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
 from fastapi.encoders import jsonable_encoder
 from starlette.datastructures import UploadFile
 
-from idp.api.deps import ContainerDep, SessionDep, require
+from idp.api.deps import ContainerDep, SessionDep, rate_identity, require
 from idp.api.schemas.documents import (
     DocumentDetail,
     DocumentList,
@@ -83,6 +83,9 @@ async def upload(
     request: Request, principal: Writer, container: ContainerDep, session: SessionDep
 ) -> UploadResponse:
     """Upload one document (multipart field `file`). Processing starts asynchronously."""
+    # Per-principal upload budget (UPLOAD_RATE_LIMIT_PER_MINUTE), on top of the
+    # general API limit; checked before the body is read (F1).
+    await container.upload_limiter.hit(rate_identity(principal))
     # Reject oversized bodies before the multipart parser spools them to disk.
     max_bytes = container.settings.max_upload_bytes
     length = request.headers.get("content-length")

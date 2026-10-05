@@ -9,11 +9,12 @@ from fastapi import FastAPI
 from idp.application.jobs import RunOutcome
 from idp.container import Container
 from idp.domain.documents import ScanStatus
+from idp.domain.identity import Role
 from idp.infrastructure.scanning import ScannerUnavailableError, ScanVerdict
 from idp.infrastructure.telemetry import configure_tracing
 from tests.conftest import make_settings
 from tests.fixtures import files
-from tests.integration.conftest import TenantFixture, login, upload
+from tests.integration.conftest import USER_PASSWORD, TenantFixture, add_user, login, upload
 
 
 class FixedScanner:
@@ -68,6 +69,25 @@ async def test_per_principal_rate_limit(
     assert statuses[3] == 429
     limited = await client.get("/api/v1/documents", headers=headers)
     assert int(limited.headers["Retry-After"]) >= 1
+
+
+async def test_upload_rate_limit_is_enforced_per_principal(
+    client: httpx.AsyncClient, acme: TenantFixture, container: Container
+) -> None:
+    """F1: UPLOAD_RATE_LIMIT_PER_MINUTE bounds uploads; other endpoints are unaffected."""
+    headers = await login(client, acme.owner_email, acme.owner_password)
+    container.upload_limiter._limit = 2
+    statuses = [(await upload(client, headers, files.native_pdf(n))).status_code for n in (1, 2, 3)]
+    assert statuses == [201, 201, 429]
+    limited = await upload(client, headers, files.native_pdf(4))
+    assert limited.status_code == 429
+    assert int(limited.headers["Retry-After"]) >= 1
+    assert limited.json()["error_category"] == "RATE_LIMITED"
+    assert (await client.get("/api/v1/documents", headers=headers)).status_code == 200
+    # The budget is per principal: another user of the same tenant is not limited.
+    await add_user(container, acme.owner_email, "second@acme.test", Role.OPERATOR)
+    other = await login(client, "second@acme.test", USER_PASSWORD)
+    assert (await upload(client, other, files.native_pdf(5))).status_code == 201
 
 
 async def test_metrics_and_overview(
