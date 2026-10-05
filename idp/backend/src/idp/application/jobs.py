@@ -9,6 +9,10 @@ ARCHITECTURE.md §7 "Durability and idempotency" for the full contract:
   `attempts` value acts as a fencing token: every write re-checks it, so a
   worker whose lease was taken over can never overwrite the new owner's work.
 * `JobSweeper` re-dispatches jobs whose messages were lost or whose worker died.
+* `max_attempts` (per job row) is a hard bound: a claim never starts attempt
+  `max_attempts + 1`. A job whose lease expired on its final attempt (the
+  worker died or was killed by its time limit) is dead-lettered by whoever
+  finds it — a runner's claim or the sweeper — instead of being re-run (F2).
 """
 
 from __future__ import annotations
@@ -19,10 +23,10 @@ import uuid
 from collections.abc import Mapping
 from datetime import timedelta
 from enum import StrEnum
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import structlog
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import ColumnElement, and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from idp.application.audit import ActorType, AuditAction, AuditEntity, record_audit
@@ -96,6 +100,88 @@ def _classify(exc: Exception) -> tuple[ErrorCategory, str, str]:
     return ErrorCategory.SYSTEM_ERROR, "internal_error", _UNEXPECTED_ERROR_MESSAGE
 
 
+def _exhausted(now: Any) -> ColumnElement[bool]:
+    """Jobs that would be claimable, except that their attempt budget is spent."""
+    pj = ProcessingJob
+    return and_(
+        pj.attempts >= pj.max_attempts,
+        or_(
+            pj.status.in_([JobStatus.QUEUED, JobStatus.RETRY_SCHEDULED]),
+            and_(pj.status == JobStatus.RUNNING, pj.lease_expires_at < now),
+        ),
+    )
+
+
+async def _close_lost_steps(session: AsyncSession, job_id: uuid.UUID) -> None:
+    """Steps left RUNNING by a worker that died are closed out, not left dangling."""
+    await session.execute(
+        update(ProcessingStep)
+        .where(ProcessingStep.job_id == job_id, ProcessingStep.status == StepStatus.RUNNING)
+        .values(
+            status=StepStatus.FAILED,
+            finished_at=func.now(),
+            error_category=ErrorCategory.SYSTEM_ERROR.value,
+            error_code="worker_lost",
+            error_message="Worker stopped before the step finished (lease expired)",
+        )
+        .execution_options(synchronize_session=False)
+    )
+
+
+async def dead_letter_exhausted(
+    session: AsyncSession, job_id: uuid.UUID | None = None
+) -> list[uuid.UUID]:
+    """Dead-letter jobs whose budget is spent (one job, or a sweep batch). Caller commits."""
+    pj = ProcessingJob
+    query = select(pj).where(_exhausted(func.now()))
+    if job_id is not None:
+        query = query.where(pj.id == job_id)
+    jobs = (
+        await session.scalars(
+            query.order_by(pj.updated_at).limit(SWEEP_BATCH).with_for_update(skip_locked=True)
+        )
+    ).all()
+    for job in jobs:
+        lost = job.status is JobStatus.RUNNING
+        code = "lease_expired" if lost else "attempts_exhausted"
+        job.status = JobStatus.DEAD_LETTERED
+        job.last_error_category = ErrorCategory.SYSTEM_ERROR.value
+        job.last_error_code = code
+        job.last_error_message = (
+            "The worker stopped on the final attempt (lease expired)"
+            if lost
+            else "No attempts left"
+        )
+        job.lease_expires_at = None
+        job.next_attempt_at = None
+        job.finished_at = func.now()
+        await _close_lost_steps(session, job.id)
+        document = await session.get(Document, job.document_id, with_for_update=True)
+        if document is not None and document.status is DocumentStatus.QUEUED:
+            change_document_status(
+                session, document, DocumentStatus.PROCESSING, reason="processing started"
+            )
+        if document is not None and document.status is DocumentStatus.PROCESSING:
+            change_document_status(
+                session, document, DocumentStatus.FAILED, reason=f"system_error: {code}"
+            )
+        record_audit(
+            session,
+            action=AuditAction.JOB_DEAD_LETTERED,
+            entity_type=AuditEntity.JOB,
+            entity_id=job.id,
+            tenant_id=job.tenant_id,
+            actor_type=ActorType.SYSTEM,
+            after={
+                "attempts": job.attempts,
+                "error_category": ErrorCategory.SYSTEM_ERROR.value,
+                "error_code": code,
+            },
+        )
+        log.warning("job.dead_lettered", job_id=str(job.id), code=code, attempts=job.attempts)
+    return [job.id for job in jobs]
+
+
 class JobScheduler:
     def __init__(self, queue: JobQueue, settings: Settings) -> None:
         self._queue = queue
@@ -151,6 +237,9 @@ class JobRunner:
     async def run(self, job_id: uuid.UUID) -> RunOutcome:
         claimed = await self._claim(job_id)
         if claimed is None:
+            async with self._sf() as session, session.begin():
+                if await dead_letter_exhausted(session, job_id):
+                    return RunOutcome.DEAD_LETTERED
             log.info("job.not_claimed", job_id=str(job_id))
             return RunOutcome.NOT_CLAIMED
         fence, document_id, correlation_id = claimed
@@ -178,6 +267,7 @@ class JobRunner:
                 ),
                 and_(pj.status == JobStatus.RUNNING, pj.lease_expires_at < now),
             )
+            claimable = and_(claimable, pj.attempts < pj.max_attempts)
             row = (
                 await session.execute(
                     update(pj)
@@ -196,20 +286,7 @@ class JobRunner:
             if row is None:
                 return None
             fence, document_id, correlation_id = row
-
-            # Steps left RUNNING by a worker that died are closed out, not left dangling.
-            await session.execute(
-                update(ProcessingStep)
-                .where(ProcessingStep.job_id == job_id, ProcessingStep.status == StepStatus.RUNNING)
-                .values(
-                    status=StepStatus.FAILED,
-                    finished_at=now,
-                    error_category=ErrorCategory.SYSTEM_ERROR.value,
-                    error_code="worker_lost",
-                    error_message="Worker stopped before the step finished (lease expired)",
-                )
-                .execution_options(synchronize_session=False)
-            )
+            await _close_lost_steps(session, job_id)
             document = await session.get(Document, document_id, with_for_update=True)
             if document is not None and document.status is DocumentStatus.QUEUED:
                 change_document_status(
@@ -399,7 +476,7 @@ class JobRunner:
                             step.error_message = message
                             step.finished_at = func.now()
                             step.duration_ms = duration_ms
-                    status = self._policy.outcome(category, job.attempts)
+                    status = self._policy.outcome(category, job.attempts, job.max_attempts)
                     job.status = status
                     job.last_error_category = category.value
                     job.last_error_code = code
@@ -459,8 +536,11 @@ class JobSweeper:
         self._grace = timedelta(seconds=settings.sweeper_queued_grace_seconds)
 
     async def sweep(self) -> int:
+        """Dead-letter exhausted jobs, then re-dispatch the recoverable ones."""
         now = func.now()
         pj = ProcessingJob
+        async with self._sf() as session, session.begin():
+            dead = await dead_letter_exhausted(session)
         async with self._sf() as session:
             rows = (
                 await session.execute(
@@ -473,7 +553,8 @@ class JobSweeper:
                                 pj.next_attempt_at < now - self._grace,
                             ),
                             and_(pj.status == JobStatus.RUNNING, pj.lease_expires_at < now),
-                        )
+                        ),
+                        pj.attempts < pj.max_attempts,
                     )
                     .order_by(pj.updated_at)
                     .limit(SWEEP_BATCH)
@@ -481,6 +562,6 @@ class JobSweeper:
             ).all()
         for job_id, attempts in rows:
             await self._scheduler.dispatch(job_id, token=attempts)
-        if rows:
-            log.info("jobs.swept", count=len(rows))
-        return len(rows)
+        if rows or dead:
+            log.info("jobs.swept", count=len(rows), dead_lettered=len(dead))
+        return len(rows) + len(dead)

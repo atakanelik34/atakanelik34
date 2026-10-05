@@ -584,14 +584,19 @@ the queue:
    `RUNNING` with an expired lease (worker crashed / was killed).
 3. **Claim with a lease.** A worker starts a job only through an atomic
    `UPDATE … WHERE status IN (QUEUED, RETRY_SCHEDULED) AND due
-   OR (status = RUNNING AND lease expired) RETURNING …`. Duplicate or stale
-   messages claim nothing and exit — that is what makes delivery idempotent.
+   OR (status = RUNNING AND lease expired) AND attempts < max_attempts
+   RETURNING …`. Duplicate or stale messages claim nothing and exit — that is
+   what makes delivery idempotent. Every claim counts as an attempt, so lease
+   expiries and failures share one budget, and `max_attempts` (on the job row)
+   is a hard bound: a job whose lease expired on its final attempt is
+   dead-lettered (`lease_expired`, steps `worker_lost`, document `FAILED`,
+   audited) by the runner that finds it or by the sweeper, never re-run (F2).
 4. **Step checkpoints.** A job runs its workflow's steps in order and commits
    after each one. On resume, steps with a `SUCCEEDED` record for this job are
    skipped. Step handlers must be safe to re-run (upserts keyed by document/page),
    because a crash between a step's side effects and its commit re-runs it once.
 5. **Retries.** Retryable categories (`SYSTEM_ERROR`, `PROVIDER_ERROR`) with
-   `attempts < max_attempts` ⇒ `RETRY_SCHEDULED`, `next_attempt_at = base ·
+   `attempts < max_attempts` (the job's own budget) ⇒ `RETRY_SCHEDULED`, `next_attempt_at = base ·
    2^(attempt-1)` (capped, with jitter), re-enqueued with that delay.
    Exhausted ⇒ `DEAD_LETTERED`. Non-retryable categories ⇒ `FAILED` immediately.
    Both set the document to `FAILED`; **replay** (`POST /documents/{id}/process`)

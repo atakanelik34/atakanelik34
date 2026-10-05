@@ -27,10 +27,16 @@ class RetryPolicy:
         jitter = generator.uniform(-self.jitter_ratio, self.jitter_ratio)
         return float(max(0.0, delay * (1 + jitter)))
 
-    def outcome(self, category: ErrorCategory, attempts: int) -> JobStatus:
-        """Job status after a failed attempt number `attempts`."""
+    def outcome(
+        self, category: ErrorCategory, attempts: int, max_attempts: int | None = None
+    ) -> JobStatus:
+        """Job status after a failed attempt number `attempts`.
+
+        `max_attempts` is the job's own budget (it grows when a human resumes the
+        job); the policy's value is the default for new jobs.
+        """
         if category not in RETRYABLE_CATEGORIES:
             return JobStatus.FAILED
-        if attempts >= self.max_attempts:
+        if attempts >= (self.max_attempts if max_attempts is None else max_attempts):
             return JobStatus.DEAD_LETTERED
         return JobStatus.RETRY_SCHEDULED

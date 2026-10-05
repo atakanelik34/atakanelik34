@@ -1,6 +1,7 @@
 """Processing pipeline mechanics: claim, checkpoints, retries, dead-letter, replay,
 crash recovery, fencing, sweeper, and a real arq worker end to end."""
 
+import asyncio
 import uuid
 from collections.abc import Callable
 from datetime import timedelta
@@ -467,6 +468,210 @@ async def test_sweeper_recovers_expired_leases_and_overdue_retries(
 
     assert await sweeper.sweep() == 2
     assert sorted(queue.messages) == sorted([(dead_worker_job, 1, 0), (overdue_job, 2, 0)])
+
+
+# --- max_attempts is a hard bound (F2) ----------------------------------------------
+
+
+class HangingStep:
+    """A step that never finishes: the worker running it is killed (arq timeout / crash)."""
+
+    key = "probe"
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.started = asyncio.Event()
+
+    async def run(self, ctx: StepContext) -> StepResult:
+        self.calls += 1
+        self.started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+async def _orphan(container: Container, job_id: uuid.UUID, *, attempts: int) -> None:
+    """The state a worker leaves when it dies holding the lease on attempt `attempts`."""
+    async with container.session_factory() as session:
+        job = await session.get(ProcessingJob, job_id)
+        assert job is not None
+        job.status = JobStatus.RUNNING
+        job.attempts = attempts
+        job.lease_expires_at = sql_func.now() - timedelta(seconds=1)
+        session.add(
+            ProcessingStep(
+                tenant_id=job.tenant_id,
+                job_id=job_id,
+                step_key="probe",
+                attempt=attempts,
+                status=StepStatus.RUNNING,
+                started_at=sql_func.now(),
+            )
+        )
+        doc = await session.get(Document, job.document_id)
+        assert doc is not None
+        doc.status = DocumentStatus.PROCESSING
+        await session.commit()
+
+
+async def _audit_actions(container: Container, job_id: uuid.UUID) -> list[str]:
+    async with container.session_factory() as session:
+        return list(
+            (
+                await session.scalars(
+                    select(AuditLog.action).where(AuditLog.entity_id == str(job_id))
+                )
+            ).all()
+        )
+
+
+async def test_expired_lease_on_the_final_attempt_dead_letters_without_a_further_attempt(
+    client: httpx.AsyncClient,
+    owner: dict[str, str],
+    container: Container,
+    make_runner: RunnerFactory,
+) -> None:
+    doc_id, job_id = await _upload(client, owner, files.native_pdf())
+    max_attempts = (await _job(container, job_id)).max_attempts
+    await _orphan(container, job_id, attempts=max_attempts)
+    probe = CountingStep("probe")
+    assert await make_runner({"probe": probe}).run(job_id) is RunOutcome.DEAD_LETTERED
+    assert probe.calls == 0  # no attempt max_attempts + 1
+    job = await _job(container, job_id)
+    assert (job.status, job.attempts, job.last_error_code) == (
+        JobStatus.DEAD_LETTERED,
+        max_attempts,
+        "lease_expired",
+    )
+    assert job.lease_expires_at is None and job.finished_at is not None
+    assert [(s.status, s.error_code) for s in await _steps(container, job_id)] == [
+        (StepStatus.FAILED, "worker_lost")
+    ]
+    assert (await _document(container, doc_id)).status is DocumentStatus.FAILED
+    assert "job.dead_lettered" in await _audit_actions(container, job_id)
+    # Terminal: further deliveries do nothing.
+    assert await make_runner({"probe": probe}).run(job_id) is RunOutcome.NOT_CLAIMED
+
+
+async def test_worker_killed_on_every_attempt_is_dead_lettered_after_max_attempts(
+    client: httpx.AsyncClient,
+    owner: dict[str, str],
+    container: Container,
+    make_runner: RunnerFactory,
+) -> None:
+    """Lease expiry + worker restart, repeatedly: the job ends; it is never RUNNING forever."""
+    doc_id, job_id = await _upload(client, owner, files.native_pdf())
+    max_attempts = (await _job(container, job_id)).max_attempts
+    hang = HangingStep()
+    outcomes = []
+    for _ in range(max_attempts + 3):
+        hang.started.clear()
+        worker = asyncio.create_task(make_runner({"probe": hang}).run(job_id))
+        done, _ = await asyncio.wait(
+            {worker, asyncio.ensure_future(hang.started.wait())},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if worker in done:
+            outcomes.append(worker.result())
+            continue
+        worker.cancel()  # killed by its time limit / the process dies
+        with pytest.raises(asyncio.CancelledError):
+            await worker
+        outcomes.append(None)
+        async with container.session_factory() as session:  # the lease runs out
+            await session.execute(
+                update(ProcessingJob)
+                .where(ProcessingJob.id == job_id)
+                .values(lease_expires_at=sql_func.now() - timedelta(seconds=1))
+            )
+            await session.commit()
+    assert hang.calls == max_attempts
+    assert outcomes[max_attempts] is RunOutcome.DEAD_LETTERED
+    assert set(outcomes[max_attempts + 1 :]) == {RunOutcome.NOT_CLAIMED}
+    job = await _job(container, job_id)
+    assert (job.status, job.attempts) == (JobStatus.DEAD_LETTERED, max_attempts)
+    assert (await _document(container, doc_id)).status is DocumentStatus.FAILED
+
+
+async def test_retries_and_lease_expiries_share_one_attempt_budget(
+    client: httpx.AsyncClient,
+    owner: dict[str, str],
+    container: Container,
+    make_runner: RunnerFactory,
+) -> None:
+    """Attempt 1 fails transiently, attempt 2 dies with its lease, attempt 3 fails: done."""
+    _, job_id = await _upload(client, owner, files.native_pdf())
+    flaky = FailingStep(ProviderError("OCR service timed out"))
+    assert await make_runner({"probe": flaky}).run(job_id) is RunOutcome.RETRY_SCHEDULED
+    await _make_due(container, job_id)
+    hang = HangingStep()
+    worker = asyncio.create_task(make_runner({"probe": hang}).run(job_id))
+    await hang.started.wait()
+    worker.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await worker
+    async with container.session_factory() as session:  # its lease runs out
+        await session.execute(
+            update(ProcessingJob)
+            .where(ProcessingJob.id == job_id)
+            .values(lease_expires_at=sql_func.now() - timedelta(seconds=1))
+        )
+        await session.commit()
+    assert await make_runner({"probe": flaky}).run(job_id) is RunOutcome.DEAD_LETTERED
+    job = await _job(container, job_id)
+    assert (job.status, job.attempts, flaky.calls) == (JobStatus.DEAD_LETTERED, 3, 2)
+    await _make_due(container, job_id)
+    assert await make_runner({"probe": flaky}).run(job_id) is RunOutcome.NOT_CLAIMED
+
+
+async def test_the_job_row_max_attempts_is_the_bound(
+    client: httpx.AsyncClient,
+    owner: dict[str, str],
+    container: Container,
+    make_runner: RunnerFactory,
+) -> None:
+    """A job's own budget (raised on review/approval resumes) decides, not the global setting."""
+    _, job_id = await _upload(client, owner, files.native_pdf())
+    async with container.session_factory() as session:
+        await session.execute(
+            update(ProcessingJob).where(ProcessingJob.id == job_id).values(max_attempts=5)
+        )
+        await session.commit()
+    flaky = FailingStep(ProviderError("OCR service timed out"))
+    outcomes = []
+    for _ in range(7):
+        outcomes.append(await make_runner({"probe": flaky}).run(job_id))
+        await _make_due(container, job_id)
+    assert outcomes[:5] == [RunOutcome.RETRY_SCHEDULED] * 4 + [RunOutcome.DEAD_LETTERED]
+    assert flaky.calls == 5
+    assert (await _job(container, job_id)).attempts == 5
+
+
+async def test_sweeper_dead_letters_exhausted_jobs_instead_of_redispatching(
+    client: httpx.AsyncClient,
+    owner: dict[str, str],
+    container: Container,
+    queue: RecordingQueue,
+    sweeper: JobSweeper,
+) -> None:
+    exhausted_doc, exhausted = await _upload(client, owner, files.native_pdf(1))
+    _, recoverable = await _upload(client, owner, files.native_pdf(2))
+    max_attempts = (await _job(container, exhausted)).max_attempts
+    await _orphan(container, exhausted, attempts=max_attempts)
+    await _orphan(container, recoverable, attempts=1)
+    queue.messages.clear()
+    await sweeper.sweep()
+    assert queue.messages == [(recoverable, 1, 0)]
+    job = await _job(container, exhausted)
+    assert (job.status, job.attempts, job.last_error_code) == (
+        JobStatus.DEAD_LETTERED,
+        max_attempts,
+        "lease_expired",
+    )
+    assert (await _document(container, exhausted_doc)).status is DocumentStatus.FAILED
+    assert (await _job(container, recoverable)).status is JobStatus.RUNNING
+    queue.messages.clear()
+    await sweeper.sweep()
+    assert queue.messages == [(recoverable, 1, 0)]  # the dead-lettered job stays terminal
 
 
 # --- real arq worker, end to end ---------------------------------------------------

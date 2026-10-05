@@ -155,18 +155,14 @@ async def test_worker_crash_during_ocr_recovers(
     record("7 worker crash during OCR", steps=steps, recovered=True)
 
 
-# 6 / 9: the defect --------------------------------------------------------------------------
-@pytest.mark.xfail(
-    strict=True,
-    reason="F2: a job re-claimed after lease expiry ignores max_attempts; a step that always "
-    "outlasts the lease (e.g. long OCR) is re-claimed forever instead of dead-lettered",
-)
+# 6 / 9: F2 (fixed): max_attempts bounds lease-expiry re-claims ------------------------------
 async def test_step_that_always_outlasts_the_lease_is_dead_lettered(
     client, acme, container, ocr_handlers, runner_factory, record
 ) -> None:  # type: ignore[no-untyped-def]
     job_id = await _scan(client, acme, pages=3)
     max_attempts = (await job_row(container, job_id))["max_attempts"]
-    claims = 0
+    claims = 0  # deliveries that actually ran the workflow (OCR started)
+    outcomes = []
     for _ in range(max_attempts + 2):
         ocr = FaultyOCR(delay_seconds=1.0)
         task = asyncio.create_task(
@@ -178,15 +174,22 @@ async def test_step_that_always_outlasts_the_lease_is_dead_lettered(
             outcome = await task
         except asyncio.CancelledError:
             outcome = None
-        if outcome is not RunOutcome.NOT_CLAIMED:
+        outcomes.append(outcome.value if outcome else "killed")
+        if ocr.calls:
             claims += 1
         await expire_lease(container, job_id)
     row = await job_row(container, job_id)
     record(
-        "6/9 step always outlasts lease",
+        "6/9 step always outlasts lease (F2 fixed)",
         claims=claims,
         max_attempts=max_attempts,
+        attempts=row["attempts"],
+        outcomes=outcomes,
         final=str(row["status"]),
+        error=row["last_error_code"],
     )
     assert str(row["status"]) == "DEAD_LETTERED"
+    assert row["attempts"] == max_attempts
     assert claims <= max_attempts
+    assert outcomes[max_attempts] == "dead_lettered"
+    assert set(outcomes[max_attempts + 1 :]) == {"not_claimed"}
