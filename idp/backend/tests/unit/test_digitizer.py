@@ -195,3 +195,34 @@ async def test_tesseract_reads_committed_real_scans(tmp_path: Path, scan: Path) 
     text = "\n".join(p.layout.text for p in result.pages).casefold()
     missing = [w for w in expected if w.strip() and w.strip().casefold() not in text]
     assert not missing
+
+
+def _fake_tesseract(tmp_path: Path) -> Path:
+    """Records the OpenMP thread limit it was started with; answers an empty TSV."""
+    script = tmp_path / "tesseract"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'echo "${{OMP_THREAD_LIMIT:-unset}}" > {tmp_path}/omp\n'
+        'echo "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext"\n'
+    )
+    script.chmod(0o755)
+    return script
+
+
+async def test_tesseract_runs_single_threaded_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pages are OCR'd in parallel (several jobs per worker): OpenMP threads per process
+    oversubscribe the worker's CPUs. Measured in phase 13: 4 jobs x 4 threads on a
+    2-CPU worker pushed single pages past the 120 s OCR timeout."""
+    monkeypatch.delenv("OMP_THREAD_LIMIT", raising=False)
+    image = tmp_path / "page.png"
+    image.write_bytes(files.png())
+    engine = TesseractOCREngine(
+        binary=str(_fake_tesseract(tmp_path)), languages="eng", timeout_seconds=10
+    )
+    await engine.recognize(image, page_number=1)
+    assert (tmp_path / "omp").read_text().strip() == "1"
+    monkeypatch.setenv("OMP_THREAD_LIMIT", "2")  # an operator's explicit choice wins
+    await engine.recognize(image, page_number=1)
+    assert (tmp_path / "omp").read_text().strip() == "2"

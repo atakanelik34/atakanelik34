@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import csv
 import io
+import os
 import shutil
 from pathlib import Path
 
@@ -32,12 +33,23 @@ class TesseractOCREngine:
         self._timeout = timeout_seconds
         self.version = "unknown"
 
+    @staticmethod
+    def _env() -> dict[str, str]:
+        """One OpenMP thread per tesseract process unless the operator says otherwise.
+
+        Pages and jobs already run in parallel; Tesseract's default of one thread
+        per core oversubscribes the worker (phase 13: 4 jobs x 4 threads on a 2-CPU
+        worker pushed single pages past the OCR timeout).
+        """
+        return {**os.environ, "OMP_THREAD_LIMIT": os.environ.get("OMP_THREAD_LIMIT", "1")}
+
     async def detect_version(self) -> str:
         proc = await asyncio.create_subprocess_exec(
             self._binary,
             "--version",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=self._env(),
         )
         out, _ = await proc.communicate()
         first = out.decode(errors="replace").splitlines()[:1]
@@ -58,6 +70,7 @@ class TesseractOCREngine:
             "tsv",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=self._env(),
         )
         try:
             out, _err = await asyncio.wait_for(proc.communicate(), timeout=self._timeout)
