@@ -1,6 +1,6 @@
 # Production validation test plan
 
-Status: draft for the go-live decision · Applies to: commit `52ef801` (phases 0–12)
+Status: draft for the go-live decision · Applies to: phases 0–12 plus the validation fixes (F14, F2, F15, F1, O1, OCR CI path; see §0.1)
 Owner: platform team · Reviewers: security, operations, business process owner
 
 This plan validates the platform *as built* (see [ARCHITECTURE.md](../ARCHITECTURE.md)
@@ -39,7 +39,7 @@ Results are written as JSON and rendered into
 | 3 | Large PDF | `test_large_pdf_near_the_upload_limit`, `test_pdf_over_the_upload_limit_is_refused_without_storing`; stack checks 3 | ✅ | 46 MB scanned PDF: upload 0.4 s, digitize 5.9 s, peak RSS +176 MiB. 85 MB: 413 at the edge, nothing stored. |
 | 4 | High-page-count PDF | `test_high_page_count_native_pdf[100/500/1000/1200]`, `test_page_count_above_the_limit_fails_cleanly`, `test_render_time_budget_breach_fails_fast`; stack check 4 | ✅ (F15 fixed) | About 115 ms/page at 150 dpi in 10-page chunks: 500 pages digitized in 57 s, 1,000 in 117 s, and **1,200 in 144 s**, past the old 120 s whole-document limit, completed in one attempt. Before the fix: 108 s for 1,000 pages and a ceiling of about 1,100. Chunking costs about 8 % (the PDF is reopened per chunk). With the defaults (10 s/page, 1,800 s per document), 2,000 native pages need about 230 s. A breach of the document budget (80 pages, 3 s budget) fails once, `processing_budget_exceeded`, after 3.1 s. Before: 3 attempts, then dead-lettered. 2,001 pages fail once, cleanly. |
 | 5 | Slow OCR | `test_slow_ocr_within_the_lease_completes`, `test_transient_ocr_failure_retries_the_step` | ✅ | Sequential: 4 pages × 0.5 s = 3.4 s. A transient OCR error retries the step and recovers. |
-| 6 | OCR timeout + job lease interaction | `test_ocr_longer_than_lease_is_fenced_and_retried_by_another_worker`, `test_step_that_always_outlasts_the_lease_is_dead_lettered`, `test_scanned_page_count_vs_ocr_time_budget` | ✅ (F2 fixed) | When the lease expires mid-OCR, the second worker takes over and the first is fenced (`lost_lease`). Cost: 4 wasted OCR calls, no duplicate rows. A step that always outlasts its lease now runs exactly `max_attempts=3` times; the 4th delivery dead-letters it (`lease_expired`), and later deliveries claim nothing. Before the fix it was claimed 5 times and stayed RUNNING forever. At 10 s/30 s per page of OCR, the 900 s lease fits about 88/29 scanned pages. |
+| 6 | OCR timeout + job lease interaction | `test_ocr_longer_than_lease_is_fenced_and_retried_by_another_worker`, `test_step_that_always_outlasts_the_lease_is_dead_lettered`, `test_scanned_page_count_vs_ocr_time_budget` | ✅ (F2 fixed) | When the lease expires mid-OCR, the second worker takes over and the first is fenced (`lost_lease`). Cost: 4 wasted OCR calls, no duplicate rows. A step that always outlasts its lease now runs exactly `max_attempts=3` times; the 4th delivery dead-letters it (`lease_expired`), and later deliveries claim nothing. Before the fix it was claimed 5 times and stayed RUNNING forever. A live worker no longer loses its lease to slow OCR: the heartbeat (30 s) renews the 300 s lease. With a 1 s lease and a 0.25 s heartbeat, 5 contenders all got `not_claimed`, with 4 OCR calls for 4 pages. Scanned-page capacity is now bounded by `DIGITIZE_TIMEOUT_SECONDS` (1,800 s ≈ 180 pages at 10 s/page of OCR), not by the lease. |
 | 7 | Worker crash during OCR | `test_worker_crash_during_ocr_recovers` | ✅ | Crash mid-OCR: job stays RUNNING, a live lease can't be stolen; after expiry the stale step is marked `worker_lost`, digitize re-runs once, probe isn't redone. |
 | 8 | Lease expiry during processing | `test_lease_expiry_without_contention_is_harmless`, plus #6 | ✅ | Without contention the slow worker still completes; with contention it is fenced. |
 | 9 | Retry after lease expiry | `test_sweeper_redispatches_expired_leases`, #6, #7 | ✅ (bounded, F2 fixed) | The sweeper re-dispatches expired leases while attempts remain; the next worker re-claims and finishes. With no attempts left, the sweeper dead-letters the job instead. |
@@ -51,10 +51,31 @@ Results are written as JSON and rendered into
 | 15 | LLM timeout / retry interaction | `test_llm_transient_timeouts_are_retried_within_the_call`, `test_llm_retries_are_bounded_by_the_provider_timeout`, `test_llm_breaker_opens_after_repeated_timeouts`, `test_llm_call_cut_by_the_provider_timeout_is_still_metered` | ✅; ❌ **F13** (xfail) | 2 timeouts then success: 1 usage record with `attempts=3`. Gateway retries are cut at the 1.5 s provider timeout and the document goes to review, not FAILED. The breaker opens after 2 failures. A call cut by the timeout leaves **no** usage record. |
 | 16 | ERP timeout / retry interaction | `test_erp_timeout_is_retried_with_the_same_idempotency_key`, `test_erp_timeouts_exhaust_retries_into_dead_letter`, `test_erp_rejection_is_not_retried`, `test_replay_after_erp_timeouts_keeps_the_idempotency_key` | ✅ (F14 fixed) | Timeout then retry: 2 requests, 1 key, posted once and recorded. 3 timeouts: dead-lettered, document FAILED, run left `approved`. HTTP 400: FAILED after 1 attempt. Replay after dead-letter: same key on all 4 requests. A second replay makes **no** ERP call (`deduplicated_from_id`). |
 
-**Summary of this run:**
-* Fault-injection suite: 30 passed, 7 expected failures (all known defects).
-* Live stack: 8/8 checks passed.
-* Default suite unchanged: 345 passed.
+**Summary of the latest run (after the fixes, 2026-10-05):**
+* Fault-injection suite: 36 passed, 3 expected failures (F12, F13, F16: open, not
+  in this fix round). Before the fixes: 30 passed, 7 expected failures.
+* Live stack (sandbox, `OCR_ENGINE=none`, run with `--skip-ocr`): 8/8 checks passed.
+* Default suite: 366 passed, 1 skipped (no real scan committed yet), up from 345.
+* Frontend: lint, typecheck, 28 tests, build: all pass.
+
+### 0.1 Fixes in this round
+
+Each fix is a separate commit. Each was preceded by a regression test that
+failed on the old code, and each removed the matching strict xfail.
+
+| Finding | Commit | Regression evidence (before → after) |
+|---|---|---|
+| F14 ERP idempotency | `e68b82d` | ERP posts, then the acknowledgement is lost (connection reset or worker crash). Retry and replay: **2 postings → 1**. The replay makes no ERP call (`deduplicated_from_id`). Dead-letter then replay: the same key on every request. |
+| F2 max_attempts | `3f4c598` | A worker killed on every attempt: **6 attempts with max 3 → 3**, then `DEAD_LETTERED` (`lease_expired`). The sweeper dead-letters exhausted jobs instead of re-dispatching them. The job row's budget is honoured (5 → 5). |
+| F15 time budgets + heartbeat | `f2549b8` | 1,200 pages (144 s of rendering, past the old 120 s limit) completes in 1 attempt. A budget breach fails once (`processing_budget_exceeded`) instead of 3 attempts and dead-letter. With a 1 s lease and a 0.25 s heartbeat, no contender re-claims a live worker's job and no OCR call is wasted. |
+| F1 upload rate limit | `e0bc822` | Limit 2: `[201, 201, 201]` → `[201, 201, 429]`, with `Retry-After`. Other principals are unaffected. |
+| O1 Postgres memory | `5ac3b0d` | Live stack: limit 2 GiB (was the 16 GiB host), `shared_buffers` 512MB. Peak use 149 MiB during the flood and processing. |
+| F4 (OCR part) | `7cf8c33` | CI paths added: Tesseract in the backend job, in-image OCR check, live-stack OCR check. **Not yet run in CI.** In this sandbox only the host Tesseract 5.3.4 read the synthetic scan-like page (confidence 0.95, 8.3 s). |
+
+F12 note: its expected-failure test was made deterministic. It now simulates
+both requests passing the duplicate pre-check. The F1 check adds a Redis
+round-trip before ingestion, so the timing race no longer reproduced reliably.
+The defect itself (`MissingGreenlet` → 500) is unchanged and still confirmed.
 
 **How to run**
 
@@ -63,6 +84,10 @@ Results are written as JSON and rendered into
 cd backend && TEST_DATABASE_URL=… TEST_REDIS_URL=… pytest -m validation -rx
 # live stack (stack up via docker compose; uses the backend venv for httpx)
 backend/.venv/bin/python scripts/validation/stack_validation.py --uploads 100 --pages 500
+#   (add --skip-ocr only for a stack started with OCR_ENGINE=none)
+# real OCR inside the default image (CI does this after building it)
+docker run --rm -v "$PWD:/src:ro" -e PYTHONPATH=/src/backend -e JWT_SECRET=… \
+  idp-backend:ci python /src/scripts/validation/ocr_check.py
 python3 scripts/validation/render_report.py      # → docs/validation/RESULTS.md
 ```
 
@@ -72,7 +97,7 @@ python3 scripts/validation/render_report.py      # → docs/validation/RESULTS.m
 
 | Evidence | Covers | Does **not** cover |
 |---|---|---|
-| 345 backend tests (unit + integration on real Postgres/Redis) | Domain rules, job durability (lease, retry, dead-letter, sweeper), every API flow, RLS policies (via `FORCE ROW LEVEL SECURITY` as table owner), LLM/webhook/REST adapters against HTTP mock transports | Real model servers, real SMTP, real ClamAV, real S3, the runtime DB role under attack, load, long documents |
+| 366 backend tests (unit + integration on real Postgres/Redis) | Domain rules, job durability (lease, retry, dead-letter, sweeper), every API flow, RLS policies (via `FORCE ROW LEVEL SECURITY` as table owner), LLM/webhook/REST adapters against HTTP mock transports | Real model servers, real SMTP, real ClamAV, real S3, the runtime DB role under attack, load, long documents |
 | 28 frontend tests | Pages and components against mocked APIs | Real browsers, accessibility, large documents in the viewer |
 | One Compose E2E run (sandbox) | Images build and start hardened (non-root, read-only); migrations + `idp_app` role; native-PDF flow through enrichment, action approval, mock ERP and outbox; UI screenshots with zero console errors | **Tesseract OCR** (the sandbox blocked the Debian mirror; image built with `OCR_PACKAGES=""`), ClamAV, LLMs, webhooks/SMTP, restore, more than three documents |
 
@@ -99,7 +124,8 @@ python3 scripts/validation/render_report.py      # → docs/validation/RESULTS.m
 
 **Go-live rule:** F1, F2, F4, F6, F9, F14 and F15 must be resolved, or formally accepted with a
 documented limit (for example "maximum 15 scanned pages per document"), before the
-go/no-go meeting.
+go/no-go meeting. **Status:** F1, F2, F14 and F15 are resolved. F4 is partly addressed:
+the Tesseract CI path exists but has not run, and ClamAV is not validated. F6 and F9 are open.
 
 ## 3. Environment
 

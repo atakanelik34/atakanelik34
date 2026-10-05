@@ -79,9 +79,27 @@ async def test_concurrent_identical_uploads_keep_one_document(
     reason="F12: losing the duplicate-upload race reads an expired ORM object after rollback "
     "(MissingGreenlet) and answers 500 instead of 409",
 )
-async def test_concurrent_identical_uploads_answer_409_not_500(client, acme, record) -> None:  # type: ignore[no-untyped-def]
+async def test_concurrent_identical_uploads_answer_409_not_500(
+    client, acme, record, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    """The race loser path, made deterministic: each request's duplicate pre-check misses
+    (as when identical uploads pass it before either commits), so every request after the
+    first reaches the unique-constraint path. Timing alone no longer reproduces it reliably
+    since the upload rate-limit check (F1) added a Redis round-trip before ingestion."""
+    from idp.application.ingestion import IngestionService
+
+    original = IngestionService._find_duplicate
+
+    async def lost_race(self, *args):  # type: ignore[no-untyped-def]
+        calls = getattr(self, "_race_calls", 0)
+        self._race_calls = calls + 1
+        return None if calls == 0 else await original(self, *args)
+
+    monkeypatch.setattr(IngestionService, "_find_duplicate", lost_race)
     headers = await login(client, acme.owner_email, acme.owner_password)
-    statuses = await _identical_uploads(client, headers, files.native_pdf(pages=3), 20)
+    data = files.native_pdf(pages=3)
+    statuses = [(await upload(client, headers, data)).status_code for _ in range(3)]
+    statuses += await _identical_uploads(client, headers, data, 10)
     record("10 identical uploads: race losers", statuses=sorted(map(str, set(statuses))))
     assert all(s in (201, 409) for s in statuses), statuses
 
