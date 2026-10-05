@@ -1,0 +1,5 @@
+# SANDBOX WORKAROUND: run api/worker on the default image + conda-forge Tesseract
+# (see Dockerfile here). Real OCR on the actual container runtime path.
+services:
+  api: {image: "idp-backend:tess", environment: {OCR_ENGINE: tesseract}}
+  worker: {image: "idp-backend:tess", environment: {OCR_ENGINE: tesseract}}

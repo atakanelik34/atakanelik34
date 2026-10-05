@@ -219,8 +219,12 @@ async def seed(api: Api, values: dict[str, str], tag: str) -> dict[str, Any]:
         await api.post(f"/documents/{stp_id}/actions/approve", admin, {"note": "drill"})
     ).raise_for_status()
     await api.wait(admin, rev_id, {"WAITING_FOR_HUMAN"})
-    tasks = await api.get("/reviews", admin)
-    task = next(t for t in tasks if t["document_id"] == rev_id)
+    # The list is oldest-first without a document filter: look the task up directly.
+    task_id = psql_owner(
+        values,
+        f"SET app.tenant_id = '*'; SELECT id FROM review_tasks WHERE document_id = '{rev_id}';",
+    ).split()[-1]
+    task = {"id": task_id}
     detail = await api.get(f"/reviews/{task['id']}", admin)
     (await api.post(f"/reviews/{task['id']}/claim", admin)).raise_for_status()
     vendor = detail["parts"][0]["fields"]["vendor_name"]
