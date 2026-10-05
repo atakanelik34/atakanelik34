@@ -98,6 +98,12 @@ The Compose file is a development stack. For production:
 * **Observability:** scrape `http://api:8000/metrics` (set `METRICS_TOKEN`) and
   each worker on port 9100; set `OTEL_EXPORTER_OTLP_ENDPOINT` and install the
   `otel` extra for tracing.
+* **Job time budgets:** `JOB_LEASE_SECONDS` / `JOB_HEARTBEAT_SECONDS` decide
+  how fast a dead worker is noticed. `JOB_TIMEOUT_SECONDS`,
+  `DIGITIZE_TIMEOUT_SECONDS` and `DIGITIZE_PAGE_TIMEOUT_SECONDS` decide how long
+  work may take. They must nest, and the settings refuse values that do not
+  (see `.env.example`). Raise the digitize budgets for very large scans, and
+  raise `JOB_TIMEOUT_SECONDS` above them.
 * **Backups:** `make backup` (`scripts/backup.sh`) writes a Postgres dump and a
   mirror of the bucket with checksums; `scripts/restore.sh <dir>` restores
   (destructive, asks for confirmation). Encrypt and ship backups off-host and

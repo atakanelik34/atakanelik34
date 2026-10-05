@@ -591,6 +591,16 @@ the queue:
    is a hard bound: a job whose lease expired on its final attempt is
    dead-lettered (`lease_expired`, steps `worker_lost`, document `FAILED`,
    audited) by the runner that finds it or by the sweeper, never re-run (F2).
+   While a step runs, a **heartbeat** renews the lease every
+   `JOB_HEARTBEAT_SECONDS` (fenced by `attempts`), so the lease (default 300 s)
+   only measures liveness. How long an attempt may take is bounded separately
+   (F15): `JOB_TIMEOUT_SECONDS` (arq function timeout, 3600 s) >
+   `DIGITIZE_TIMEOUT_SECONDS` (whole document, render + OCR, 1800 s) +
+   `PROBE_TIMEOUT_SECONDS`, and PDFs render in chunks of 10 pages with
+   `DIGITIZE_PAGE_TIMEOUT_SECONDS` (10 s) per page. Settings refuse budgets that
+   do not nest. Exceeding a digitize budget is `processing_budget_exceeded`, a
+   document error: the job fails once instead of being retried, and the parser
+   pool is recycled.
 4. **Step checkpoints.** A job runs its workflow's steps in order and commits
    after each one. On resume, steps with a `SUCCEEDED` record for this job are
    skipped. Step handlers must be safe to re-run (upserts keyed by document/page),

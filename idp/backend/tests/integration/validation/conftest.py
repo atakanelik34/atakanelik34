@@ -45,7 +45,9 @@ _RESULTS: list[dict[str, Any]] = []
 
 # Production defaults for document limits (the shared test fixtures use 50 pages).
 PROD_MAX_PAGES = 2000
-PROD_TIMEOUT_SECONDS = 120.0
+PROD_TIMEOUT_SECONDS = 120.0  # PROBE_TIMEOUT_SECONDS
+PROD_DIGITIZE_SECONDS = 1800.0  # DIGITIZE_TIMEOUT_SECONDS (whole document, render + OCR)
+PROD_PAGE_SECONDS = 10.0  # DIGITIZE_PAGE_TIMEOUT_SECONDS
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -121,7 +123,8 @@ def ocr_digitizer() -> Iterator[HybridDigitizer]:
     d = HybridDigitizer(
         ocr=None,
         workers=2,
-        timeout_seconds=PROD_TIMEOUT_SECONDS,
+        timeout_seconds=PROD_DIGITIZE_SECONDS,
+        page_timeout_seconds=PROD_PAGE_SECONDS,
         max_pages=PROD_MAX_PAGES,
         memory_limit_mb=2048,
         render_dpi=150,  # production default

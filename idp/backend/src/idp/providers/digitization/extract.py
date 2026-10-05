@@ -69,8 +69,16 @@ def _pdf_words(page: Any, textpage: Any, rotation: int) -> list[dict[str, Any]]:
 
 
 def extract_pdf(  # noqa: PLR0917 — positional for ProcessPoolExecutor.submit
-    path: str, workdir: str, render_dpi: int, ocr_dpi: int, min_quality: float, max_pages: int
+    path: str,
+    workdir: str,
+    render_dpi: int,
+    ocr_dpi: int,
+    min_quality: float,
+    max_pages: int,
+    first: int = 0,
+    count: int | None = None,
 ) -> dict[str, Any]:
+    """Pages `first` .. `first + count - 1` (0-based; all when count is None)."""
     import pypdfium2 as pdfium  # noqa: PLC0415
 
     try:
@@ -81,9 +89,11 @@ def extract_pdf(  # noqa: PLR0917 — positional for ProcessPoolExecutor.submit
     out = Path(workdir)
     pages: list[dict[str, Any]] = []
     try:
-        if len(pdf) > max_pages:
+        total = len(pdf)
+        if total > max_pages:
             return {"ok": False, "error": "too_many_pages", "message": "Too many pages"}
-        for index in range(len(pdf)):
+        last = total if count is None else min(total, first + count)
+        for index in range(first, last):
             page = pdf[index]
             try:
                 rotation = int(page.get_rotation())
@@ -121,7 +131,7 @@ def extract_pdf(  # noqa: PLR0917 — positional for ProcessPoolExecutor.submit
         return {"ok": False, "error": "corrupted", "message": "PDF page could not be parsed"}
     finally:
         pdf.close()
-    return {"ok": True, "pages": pages}
+    return {"ok": True, "pages": pages, "total": total}
 
 
 def extract_image(path: str, workdir: str, max_pages: int) -> dict[str, Any]:

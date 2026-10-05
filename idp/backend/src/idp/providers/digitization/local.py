@@ -3,6 +3,18 @@
 Parsing/rendering runs in the isolated process pool (pdfium is not thread-safe
 and files are untrusted); OCR runs through the `OCREngine` port. Pages never go
 to OCR when their native text layer is readable.
+
+Time budgets (F15) are explicit and nested:
+
+* PDFs are rendered in chunks of `chunk_pages`; each chunk may take at most
+  `page_timeout_seconds` per page, so the limit scales with the document instead
+  of one fixed whole-document timeout.
+* `timeout_seconds` caps the whole document (rendering + OCR). Every chunk and
+  every OCR call is also bounded by what is left of it.
+
+Exceeding either budget is a `ProcessingBudgetExceededError`: a document error,
+failed once and not retried, because the same document would exceed it again.
+The parser pool is recycled so a child stuck on a page cannot keep a slot.
 """
 
 from __future__ import annotations
@@ -18,7 +30,13 @@ from pathlib import Path
 from typing import Any
 
 from idp.domain.documents import JPEG, PDF, PNG, TIFF
-from idp.domain.errors import DocumentError, IDPError, ProviderError, UnsupportedMediaTypeError
+from idp.domain.errors import (
+    DocumentError,
+    IDPError,
+    ProcessingBudgetExceededError,
+    ProviderError,
+    UnsupportedMediaTypeError,
+)
 from idp.domain.geometry import (
     BBox,
     OcrStatus,
@@ -66,6 +84,8 @@ class HybridDigitizer:
         render_dpi: int,
         ocr_dpi: int,
         min_native_quality: float,
+        page_timeout_seconds: float = 10.0,
+        chunk_pages: int = 10,
     ) -> None:
         self.version = f"pdfium-{version('pypdfium2')}"
         self._ocr = ocr
@@ -76,6 +96,8 @@ class HybridDigitizer:
         self._render_dpi = render_dpi
         self._ocr_dpi = ocr_dpi
         self._min_quality = min_native_quality
+        self._page_timeout = page_timeout_seconds
+        self._chunk_pages = chunk_pages
         self._pool = self._new_pool()
 
     def _new_pool(self) -> ProcessPoolExecutor:
@@ -86,11 +108,58 @@ class HybridDigitizer:
             initargs=(self._memory_limit_mb,),
         )
 
-    async def _extract(self, path: Path, mime: str, workdir: Path) -> dict[str, Any]:
+    def _recycle_pool(self) -> None:
+        """Replace the pool, terminating its children (one may be stuck on a page).
+
+        Other calls still running in the old pool fail with BrokenProcessPool,
+        which is transient: their jobs retry within their attempt budget.
+        """
+        pool, self._pool = self._pool, self._new_pool()
+        children = list(getattr(pool, "_processes", {}).values())
+        pool.shutdown(wait=False, cancel_futures=True)
+        for child in children:
+            child.terminate()
+
+    async def _call(self, func: Any, *args: Any, budget: float, reason: str) -> dict[str, Any]:
         loop = asyncio.get_running_loop()
-        if mime == PDF:
-            call = loop.run_in_executor(
-                self._pool,
+        try:
+            raw: dict[str, Any] = await asyncio.wait_for(
+                loop.run_in_executor(self._pool, func, *args), timeout=max(budget, 0.001)
+            )
+        except BrokenProcessPool as exc:
+            self._recycle_pool()
+            raise ProviderError("Document parser process crashed") from exc
+        except TimeoutError as exc:
+            self._recycle_pool()
+            raise ProcessingBudgetExceededError(
+                "The document needs more time to digitize than its budget allows",
+                details={"reason": reason},
+            ) from exc
+        if not raw["ok"]:
+            raise DocumentError(raw["message"], details={"reason": raw["error"]})
+        return raw
+
+    async def _extract(
+        self, path: Path, mime: str, workdir: Path, deadline: float
+    ) -> list[dict[str, Any]]:
+        if mime in (PNG, JPEG, TIFF):
+            raw = await self._call(
+                extract_image,
+                str(path),
+                str(workdir),
+                self._max_pages,
+                budget=deadline - time.monotonic(),
+                reason="document_timeout",
+            )
+            return list(raw["pages"])
+        if mime != PDF:
+            raise UnsupportedMediaTypeError(f"Cannot digitize {mime}")
+        pages: list[dict[str, Any]] = []
+        first, total = 0, None
+        while total is None or first < total:
+            page_budget = self._chunk_pages * self._page_timeout
+            remaining = deadline - time.monotonic()
+            raw = await self._call(
                 extract_pdf,
                 str(path),
                 str(workdir),
@@ -98,30 +167,22 @@ class HybridDigitizer:
                 self._ocr_dpi,
                 self._min_quality,
                 self._max_pages,
+                first,
+                self._chunk_pages,
+                budget=min(page_budget, remaining),
+                reason="page_timeout" if page_budget <= remaining else "document_timeout",
             )
-        elif mime in (PNG, JPEG, TIFF):
-            call = loop.run_in_executor(
-                self._pool, extract_image, str(path), str(workdir), self._max_pages
-            )
-        else:
-            raise UnsupportedMediaTypeError(f"Cannot digitize {mime}")
-        try:
-            raw: dict[str, Any] = await asyncio.wait_for(call, timeout=self._timeout)
-        except BrokenProcessPool as exc:
-            self._pool.shutdown(wait=False, cancel_futures=True)
-            self._pool = self._new_pool()
-            raise ProviderError("Document parser process crashed") from exc
-        except TimeoutError as exc:
-            raise ProviderError("Digitization timed out") from exc
-        if not raw["ok"]:
-            raise DocumentError(raw["message"], details={"reason": raw["error"]})
-        return raw
+            pages.extend(raw["pages"])
+            total = raw["total"]
+            first += self._chunk_pages
+        return pages
 
     async def digitize(self, path: Path, mime: str, workdir: Path) -> DigitizationResult:
-        raw = await self._extract(path, mime, workdir)
+        deadline = time.monotonic() + self._timeout
+        raw_pages = await self._extract(path, mime, workdir, deadline)
         pages: list[DigitizedPage] = []
         ocr_seconds = 0.0
-        for page in raw["pages"]:
+        for page in raw_pages:
             number = page["page_number"]
             rotation = page["rotation"]
             # pdfium reports page size as displayed (rotation applied).
@@ -136,7 +197,15 @@ class HybridDigitizer:
             else:
                 started = time.perf_counter()
                 try:
-                    result = await self._ocr.recognize(Path(page["ocr_image"]), page_number=number)
+                    result = await asyncio.wait_for(
+                        self._ocr.recognize(Path(page["ocr_image"]), page_number=number),
+                        timeout=max(deadline - time.monotonic(), 0.001),
+                    )
+                except TimeoutError as exc:
+                    raise ProcessingBudgetExceededError(
+                        "The document needs more time to digitize than its budget allows",
+                        details={"reason": "document_timeout"},
+                    ) from exc
                 except IDPError:
                     raise
                 except Exception as exc:  # engine crashed unexpectedly

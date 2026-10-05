@@ -64,6 +64,15 @@ class DocumentError(IDPError):
     code = "document_error"
 
 
+class ProcessingBudgetExceededError(DocumentError):
+    """A valid document needs more time than its budget allows.
+
+    Deterministic for a given document and configuration, so it is not retried.
+    """
+
+    code = "processing_budget_exceeded"
+
+
 class ValidationError(IDPError):
     category = ErrorCategory.VALIDATION_ERROR
     code = "validation_error"

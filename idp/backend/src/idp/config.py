@@ -79,8 +79,20 @@ class Settings(BaseSettings):
     job_max_attempts: int = Field(default=3, ge=1, le=20)
     job_retry_base_seconds: float = Field(default=10.0, gt=0)
     job_retry_max_seconds: float = Field(default=600.0, gt=0)
-    # A RUNNING job whose lease expired is presumed dead and is reclaimed.
-    job_lease_seconds: int = Field(default=900, ge=30)
+    # Time budgets (F15) nest: page budget ≤ digitize budget < job timeout, while the
+    # lease only has to outlive a missed heartbeat or two — it is how quickly a dead
+    # worker is noticed, not how long a job may take.
+    # A RUNNING job whose lease expired is presumed dead and is reclaimed. The
+    # runner renews the lease every JOB_HEARTBEAT_SECONDS while a step runs.
+    job_lease_seconds: int = Field(default=300, ge=30)
+    job_heartbeat_seconds: float = Field(default=30.0, gt=0)
+    # Wall-clock limit of one attempt (the arq function timeout).
+    job_timeout_seconds: int = Field(default=3600, ge=60)
+    # Digitization: per-page render budget and the whole-document budget
+    # (render + OCR). Exceeding either fails the job once (not retried).
+    digitize_page_timeout_seconds: float = Field(default=10.0, gt=0)
+    digitize_timeout_seconds: float = Field(default=1800.0, gt=0)
+    digitize_chunk_pages: int = Field(default=10, ge=1, le=200)
     sweeper_queued_grace_seconds: int = Field(default=60, ge=5)
     probe_timeout_seconds: float = Field(default=120.0, gt=0)
     probe_max_pages: int = Field(default=2000, ge=1)
@@ -229,6 +241,16 @@ class Settings(BaseSettings):
                 raise ValueError("STORAGE_BACKEND=local is not allowed in production")
             if "*" in self.cors_origins:
                 raise ValueError("CORS_ORIGINS='*' is not allowed in production")
+        if self.job_heartbeat_seconds * 2 > self.job_lease_seconds:
+            raise ValueError("JOB_HEARTBEAT_SECONDS must be at most half of JOB_LEASE_SECONDS")
+        if self.digitize_timeout_seconds + self.probe_timeout_seconds >= self.job_timeout_seconds:
+            raise ValueError(
+                "JOB_TIMEOUT_SECONDS must exceed DIGITIZE_TIMEOUT_SECONDS + PROBE_TIMEOUT_SECONDS"
+            )
+        if self.digitize_page_timeout_seconds > self.digitize_timeout_seconds:
+            raise ValueError(
+                "DIGITIZE_PAGE_TIMEOUT_SECONDS must not exceed DIGITIZE_TIMEOUT_SECONDS"
+            )
         if self.storage_backend is StorageBackend.S3 and (
             self.s3_access_key_id is None or self.s3_secret_access_key is None
         ):

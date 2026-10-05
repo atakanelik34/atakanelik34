@@ -13,10 +13,15 @@ ARCHITECTURE.md §7 "Durability and idempotency" for the full contract:
   `max_attempts + 1`. A job whose lease expired on its final attempt (the
   worker died or was killed by its time limit) is dead-lettered by whoever
   finds it — a runner's claim or the sweeper — instead of being re-run (F2).
+* While a step runs, a heartbeat renews the lease every `job_heartbeat_seconds`
+  (fenced by `attempts`), so the lease only measures worker liveness; how long
+  an attempt may take is bounded by `job_timeout_seconds` and the steps' own
+  budgets (F15). A dead worker stops renewing and its lease expires.
 """
 
 from __future__ import annotations
 
+import asyncio
 import random
 import time
 import uuid
@@ -231,6 +236,7 @@ class JobRunner:
         self._scheduler = scheduler
         self._handlers = handlers
         self._lease = timedelta(seconds=settings.job_lease_seconds)
+        self._heartbeat = settings.job_heartbeat_seconds
         self._policy = retry_policy(settings)
         self._rng = rng
 
@@ -362,7 +368,11 @@ class JobRunner:
                 # End the read transaction: step I/O (downloads, parsing, OCR) must not
                 # hold a connection or locks. Handlers do their I/O first, then write.
                 await session.commit()
-                result = await handler.run(StepContext(session, current, document))
+                beat = asyncio.create_task(self._beat(job_id, fence))
+                try:
+                    result = await handler.run(StepContext(session, current, document))
+                finally:
+                    beat.cancel()
                 # Fence check + result write happen in one short transaction.
                 await self._fenced(session, job_id, fence)
                 step_row = _require(await session.get(ProcessingStep, step_id), "step")
@@ -392,6 +402,30 @@ class JobRunner:
                 return await self._fail(job_id, fence, step_id, exc, duration)
         log.info("job.step_succeeded", step=handler.key, metrics=result.metrics)
         return None
+
+    async def _beat(self, job_id: uuid.UUID, fence: int) -> None:
+        """Renew the lease while this attempt still owns the job; stop once it does not."""
+        pj = ProcessingJob
+        while True:
+            await asyncio.sleep(self._heartbeat)
+            try:
+                async with self._sf() as session, session.begin():
+                    renewed = await session.execute(
+                        update(pj)
+                        .where(
+                            pj.id == job_id,
+                            pj.status == JobStatus.RUNNING,
+                            pj.attempts == fence,
+                        )
+                        .values(lease_expires_at=func.now() + self._lease)
+                        .execution_options(synchronize_session=False)
+                    )
+            except Exception as exc:  # a missed beat is survivable; the lease has slack
+                log.warning("job.heartbeat_failed", error=type(exc).__name__)
+                continue
+            if getattr(renewed, "rowcount", 1) == 0:
+                log.warning("job.heartbeat_lost_lease")
+                return
 
     async def _pause(
         self,

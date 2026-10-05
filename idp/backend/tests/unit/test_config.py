@@ -42,3 +42,29 @@ def test_cors_origins_parse_from_comma_separated_string(tmp_path: Path) -> None:
 def test_secrets_do_not_leak_in_repr(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     assert settings.jwt_secret.get_secret_value() not in repr(settings)
+
+
+def test_default_time_budgets_nest(tmp_path: Path) -> None:
+    """F15: page budget ≤ document budget < attempt timeout; heartbeat ≪ lease."""
+    s = make_settings(tmp_path)
+    assert s.digitize_page_timeout_seconds <= s.digitize_timeout_seconds
+    assert s.digitize_timeout_seconds + s.probe_timeout_seconds < s.job_timeout_seconds
+    assert s.job_heartbeat_seconds * 2 <= s.job_lease_seconds
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"job_lease_seconds": 60, "job_heartbeat_seconds": 45}, "JOB_HEARTBEAT_SECONDS"),
+        ({"job_timeout_seconds": 600, "digitize_timeout_seconds": 1800}, "JOB_TIMEOUT_SECONDS"),
+        (
+            {"digitize_page_timeout_seconds": 100, "digitize_timeout_seconds": 50},
+            "DIGITIZE_PAGE_TIMEOUT_SECONDS",
+        ),
+    ],
+)
+def test_incoherent_time_budgets_are_refused(
+    tmp_path: Path, overrides: dict[str, float], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        make_settings(tmp_path, **overrides)

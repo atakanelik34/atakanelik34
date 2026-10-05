@@ -63,7 +63,12 @@ async def test_ocr_longer_than_lease_is_fenced_and_retried_by_another_worker(
     the first one's results are discarded by the fence; only one completion counts."""
     job_id = await _scan(client, acme)
     ocr = FaultyOCR(delay_seconds=0.8)
-    first = asyncio.create_task(runner_factory(ocr_handlers(ocr), job_lease_seconds=2).run(job_id))
+    # The first worker's heartbeat is stalled (blocked loop, DB partition): its lease lapses.
+    first = asyncio.create_task(
+        runner_factory(ocr_handlers(ocr), job_lease_seconds=2, job_heartbeat_seconds=3600).run(
+            job_id
+        )
+    )
     await asyncio.sleep(2.4)  # lease expired, first worker still OCR-ing
     assert (await job_row(container, job_id))["attempts"] == 1
     second = runner_factory(ocr_handlers(ocr), job_lease_seconds=30)
@@ -95,13 +100,49 @@ async def test_ocr_longer_than_lease_is_fenced_and_retried_by_another_worker(
     )
 
 
+async def test_heartbeat_keeps_a_live_worker_s_lease_during_long_ocr(
+    client, acme, container, ocr_handlers, runner_factory, record
+) -> None:  # type: ignore[no-untyped-def]
+    """F15: OCR (4 × 0.8 s) outlasts the 1 s lease, but the heartbeat (0.25 s) renews it:
+    no second worker can take over, and no OCR call is wasted."""
+    job_id = await _scan(client, acme)
+    ocr = FaultyOCR(delay_seconds=0.8)
+    first = asyncio.create_task(
+        runner_factory(ocr_handlers(ocr), job_lease_seconds=1, job_heartbeat_seconds=0.25).run(
+            job_id
+        )
+    )
+    # Same engine: the session digitizer is shared, building handlers swaps its engine.
+    contender = runner_factory(ocr_handlers(ocr))
+    contenders = []
+    for _ in range(5):
+        await asyncio.sleep(0.6)
+        contenders.append((await contender.run(job_id)).value)
+    outcome = await first
+    row = await job_row(container, job_id)
+    record(
+        "6/8 heartbeat keeps lease (F15)",
+        lease_s=1,
+        heartbeat_s=0.25,
+        ocr_calls=ocr.calls,
+        contenders=contenders,
+        outcome=outcome.value,
+        attempts=row["attempts"],
+    )
+    assert set(contenders) == {"not_claimed"}
+    assert outcome in {RunOutcome.SUCCEEDED, RunOutcome.WAITING_FOR_REVIEW}
+    assert (row["attempts"], ocr.calls) == (1, PAGES)
+
+
 async def test_lease_expiry_without_contention_is_harmless(
     client, acme, container, ocr_handlers, runner_factory, record
 ) -> None:  # type: ignore[no-untyped-def]
     """Lease expires but nobody re-claims: the slow worker still completes (fence = attempts)."""
     job_id = await _scan(client, acme, pages=3)
     ocr = FaultyOCR(delay_seconds=0.9)
-    outcome = await runner_factory(ocr_handlers(ocr), job_lease_seconds=1).run(job_id)
+    outcome = await runner_factory(
+        ocr_handlers(ocr), job_lease_seconds=1, job_heartbeat_seconds=3600
+    ).run(job_id)
     assert outcome in {RunOutcome.SUCCEEDED, RunOutcome.WAITING_FOR_REVIEW}
     record("8 lease expiry, no contention", outcome=outcome.value)
 
@@ -166,7 +207,9 @@ async def test_step_that_always_outlasts_the_lease_is_dead_lettered(
     for _ in range(max_attempts + 2):
         ocr = FaultyOCR(delay_seconds=1.0)
         task = asyncio.create_task(
-            runner_factory(ocr_handlers(ocr), job_lease_seconds=1).run(job_id)
+            runner_factory(ocr_handlers(ocr), job_lease_seconds=1, job_heartbeat_seconds=3600).run(
+                job_id
+            )
         )
         await asyncio.sleep(1.4)
         task.cancel()  # the worker's own time limit (arq timeout = lease) kills it

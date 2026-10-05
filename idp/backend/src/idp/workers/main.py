@@ -73,7 +73,9 @@ async def build_handlers(settings: Settings, ctx: dict[str, Any]) -> dict[str, S
     digitizer = HybridDigitizer(
         ocr=ocr,
         workers=settings.worker_max_jobs,
-        timeout_seconds=settings.probe_timeout_seconds,
+        timeout_seconds=settings.digitize_timeout_seconds,
+        page_timeout_seconds=settings.digitize_page_timeout_seconds,
+        chunk_pages=settings.digitize_chunk_pages,
         max_pages=settings.probe_max_pages,
         memory_limit_mb=settings.probe_memory_limit_mb,
         render_dpi=settings.render_dpi,
@@ -215,7 +217,7 @@ class WorkerSettings:
             name=PROCESS_JOB_FUNCTION,
             max_tries=1,
             keep_result=0,
-            timeout=_settings.job_lease_seconds,
+            timeout=_settings.job_timeout_seconds,
         ),
     ]
     # Cluster-wide (arq de-duplicates cron runs by id): one sweep per tick.
@@ -228,5 +230,5 @@ class WorkerSettings:
     on_shutdown = shutdown
     redis_settings: RedisSettings = arq_redis_settings(_settings)
     max_jobs = _settings.worker_max_jobs
-    job_timeout = _settings.job_lease_seconds
+    job_timeout = _settings.job_timeout_seconds
     health_check_interval = 30

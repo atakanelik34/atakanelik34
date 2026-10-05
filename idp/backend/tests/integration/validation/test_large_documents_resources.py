@@ -94,7 +94,8 @@ async def test_pdf_over_the_upload_limit_is_refused_without_storing(
 
 
 # 4 --------------------------------------------------------------------------------------
-@pytest.mark.parametrize("pages", [100, 500, 1000])
+# 1,200 pages: ~130 s of rendering, beyond the old single 120 s parser timeout (F15).
+@pytest.mark.parametrize("pages", [100, 500, 1000, 1200])
 async def test_high_page_count_native_pdf(
     client, acme, container, ocr_handlers, runner_factory, record, pages: int
 ) -> None:  # type: ignore[no-untyped-def]
@@ -280,7 +281,7 @@ async def test_cpu_and_ram_under_concurrent_documents(
     assert res.peak_scratch < 1024**3  # worker /tmp is a 1 GiB tmpfs in Compose
 
 
-# F15 / F16: deterministic limit breaches are retried as if they were transient ------------
+# F16 (open) / F15 (fixed): deterministic limit breaches must fail once ----------------------
 @pytest.mark.xfail(
     strict=True,
     reason="F16: a render that exceeds the parser memory limit (MemoryError in the child) is "
@@ -304,13 +305,6 @@ async def test_render_memory_bomb_fails_fast(
     assert str(row["status"]) == "FAILED" and row["attempts"] == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="F15: a valid document whose rendering exceeds PROBE_TIMEOUT_SECONDS times out on "
-    "every attempt (deterministic), yet is retried max_attempts times and dead-lettered; the "
-    "effective page ceiling (~1,100 native pages at 150 dpi on this hardware) is far below "
-    "PROBE_MAX_PAGES=2000",
-)
 async def test_render_time_budget_breach_fails_fast(
     client, acme, container, prod_prober, runner_factory, record
 ) -> None:  # type: ignore[no-untyped-def]
@@ -319,7 +313,7 @@ async def test_render_time_budget_breach_fails_fast(
     tight = HybridDigitizer(
         ocr=None,
         workers=1,
-        timeout_seconds=3,
+        timeout_seconds=3,  # whole-document budget
         max_pages=PROD_MAX_PAGES,
         memory_limit_mb=2048,
         render_dpi=150,
@@ -338,13 +332,15 @@ async def test_render_time_budget_breach_fails_fast(
             outcomes = await _run_to_end(container, runner_factory(handlers), job_id)
         row = await job_row(container, job_id)
         record(
-            "4/F15 render time budget",
+            "4/F15 render time budget (fixed)",
             pages=80,
             budget_s=3,
             outcomes=outcomes,
             final=str(row["status"]),
+            error=row["last_error_code"],
             wall_s=t.seconds,
         )
         assert str(row["status"]) == "FAILED" and row["attempts"] == 1
+        assert row["last_error_code"] == "processing_budget_exceeded"
     finally:
         tight.close()
