@@ -87,6 +87,18 @@ The Compose file is a development stack. For production:
   role and the API/workers as the runtime role created by
   `idp provision-db-roles` (no table ownership, subject to row-level security,
   `audit_logs` insert/select only) — the Compose file already does this.
+* **Postgres memory:** Compose caps the container at `POSTGRES_MEMORY_LIMIT`
+  (default `2g`) and sizes Postgres to match: `shared_buffers` 512MB (~25 %),
+  `effective_cache_size` 1536MB (~75 %), `work_mem` 8MB,
+  `maintenance_work_mem` 128MB, `max_connections` 100. Change them together:
+  for a limit of *M*, set `shared_buffers` ≈ M/4 and `effective_cache_size` ≈
+  3M/4, and keep `max_connections × work_mem` plus `shared_buffers` well under
+  *M* (a sort or hash can use several `work_mem`s). Count the connections the
+  stack opens: each API and worker process holds up to `DATABASE_POOL_SIZE +
+  DATABASE_MAX_OVERFLOW` (10 + 10). Size from the measured working set: watch
+  `docker stats`, the buffer cache hit ratio (`pg_stat_database`) and temp
+  files (`log_temp_files`). A managed database replaces all of this with its
+  instance class.
 * **Network:** only the reverse proxy is public; set `FORWARDED_ALLOW_IPS` on
   the API to the proxy's address/range so client IPs (rate limits, audit) can't
   be spoofed. Terminate TLS at the ingress.

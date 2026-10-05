@@ -88,6 +88,25 @@ x-backend: &backend
 services:
   postgres:
     image: postgres:16-alpine
+    # Memory is bounded explicitly (O1) and Postgres is told the size of its box:
+    # shared_buffers ≈ 25 % and effective_cache_size ≈ 75 % of the limit. Override
+    # all of them together; see README "Production deployment notes".
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-512MB}
+      - -c
+      - effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-1536MB}
+      - -c
+      - work_mem=${POSTGRES_WORK_MEM:-8MB}
+      - -c
+      - maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-128MB}
+      - -c
+      - max_connections=${POSTGRES_MAX_CONNECTIONS:-100}
+    shm_size: 256m
+    deploy:
+      resources:
+        limits: { memory: "${POSTGRES_MEMORY_LIMIT:-2g}" }
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-idp}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
