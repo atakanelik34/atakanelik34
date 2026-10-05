@@ -105,13 +105,22 @@ INVOICE = {
             aliases=["po number", "purchase order", "bestellnummer", "order no"],
         ),
         _f("currency", "currency", aliases=["currency", "währung"]),
+        # Amounts need 0.85 (phase 13 calibration, docs/validation/CALIBRATION.md):
+        # wrong scanned subtotal/tax values were extracted at confidence up to 0.841.
         _f(
             "subtotal",
             "decimal",
+            confidence_threshold=0.85,
             aliases=["subtotal", "net amount", "net total", "nettobetrag", "zwischensumme"],
             **_AMOUNT,
         ),
-        _f("tax", "decimal", aliases=["tax", "vat", "mwst", "ust", "kdv", "sales tax"], **_AMOUNT),
+        _f(
+            "tax",
+            "decimal",
+            confidence_threshold=0.85,
+            aliases=["tax", "vat", "mwst", "ust", "kdv", "sales tax"],
+            **_AMOUNT,
+        ),
         _f(
             "total",
             "decimal",

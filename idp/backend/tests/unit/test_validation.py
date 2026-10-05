@@ -116,6 +116,21 @@ def test_confidence_below_threshold_requires_human() -> None:
 INVOICE = TEMPLATES["invoice"].definition.model_dump(mode="json")
 
 
+@pytest.mark.parametrize("path", ["tax", "subtotal", "total"])
+def test_invoice_amount_thresholds_follow_calibration(path: str) -> None:
+    """Phase 13 calibration (docs/validation/CALIBRATION.md): wrong scanned amounts were
+    extracted at confidence up to 0.841, correct ones at 0.865+. Amounts need 0.85."""
+    thresholds = {p: d.confidence_threshold for p, d in TEMPLATES["invoice"].definition.flatten()}
+    assert thresholds[path] == 0.85
+
+    def confidence_issue(conf: float) -> bool:
+        issues = evaluate(ctx(INVOICE, {path: "199.50"}, conf=conf))
+        return any(i.rule_type == "confidence" and i.fields == (path,) for i in issues)
+
+    assert confidence_issue(0.841)  # highest wrong value observed: must go to review
+    assert not confidence_issue(0.865)  # lowest correct value observed: may pass
+
+
 def test_invoice_arithmetic_and_dates() -> None:
     values = {
         "subtotal": "1050.00",
