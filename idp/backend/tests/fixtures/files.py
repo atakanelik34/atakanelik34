@@ -227,3 +227,32 @@ def clean_invoice_pdf(total: str = "1,249.50 EUR") -> bytes:
     rows[0] = [(72, "Supplier: ACME Industrial Supplies GmbH")]
     rows[15] = [(370, "Total due"), (480, total)]
     return make_text_pdf(rows)
+
+
+def scan_like_pdf(lines: list[str], *, dpi: int = 300, skew_degrees: float = 1.2) -> bytes:
+    """A single-page PDF that imitates a scanner: rendered text, slight skew, sensor
+    noise, blur and JPEG compression, no text layer.
+
+    Synthetic — not a real scanned document. Real scans for OCR validation belong
+    in `tests/fixtures/scans/` (see the README there).
+    """
+    import random
+
+    import pypdfium2 as pdfium
+    from PIL import ImageFilter
+
+    pdf = pdfium.PdfDocument(make_pdf(["\n".join(lines)], font_size=14))
+    try:
+        page = pdf[0].render(scale=dpi / 72).to_pil().convert("L")
+    finally:
+        pdf.close()
+    page = page.rotate(skew_degrees, resample=Image.Resampling.BICUBIC, fillcolor=255)
+    rng = random.Random(4711)  # noqa: S311 — deterministic noise, not security
+    noise = Image.frombytes(
+        "L", page.size, bytes(rng.randrange(0, 40) for _ in range(page.width * page.height))
+    )
+    page = Image.blend(page, Image.eval(noise, lambda v: 255 - v), 0.25)
+    page = page.filter(ImageFilter.GaussianBlur(0.6))
+    buffer = io.BytesIO()
+    page.convert("RGB").save(buffer, format="PDF", resolution=dpi, quality=60)
+    return buffer.getvalue()

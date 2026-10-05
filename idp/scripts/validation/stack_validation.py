@@ -269,6 +269,11 @@ async def main() -> int:
     parser.add_argument("--uploads", type=int, default=100)
     parser.add_argument("--pages", type=int, default=500)
     parser.add_argument("--timeout", type=float, default=900)
+    parser.add_argument(
+        "--skip-ocr",
+        action="store_true",
+        help="skip the real-OCR check (only for stacks started with OCR_ENGINE=none)",
+    )
     args = parser.parse_args()
     values = env()
     stack = Stack(args.base_url)
@@ -365,10 +370,20 @@ async def main() -> int:
     status, _, body = await stack.upload(alpha, high, "statement.pdf")
     high_id = body.get("document", {}).get("id")
 
+    # OCR — a scan-like page through the real engine of the default image (Tesseract)
+    scan_id = None
+    if not args.skip_ocr:
+        status, _, body = await stack.upload(
+            alpha,
+            files.scan_like_pdf([f"Invoice INV-{run_id}", "Total due 1249.50 EUR"]),
+            "scan.pdf",
+        )
+        scan_id = body.get("document", {}).get("id")
+
     # 13 — everything above is now being processed concurrently by the worker
     processing_started = time.perf_counter()
     final = await stack.wait_terminal(
-        alpha, [*alpha_ids, *(x for x in [high_id] if x)], args.timeout
+        alpha, [*alpha_ids, *(x for x in [high_id, scan_id] if x)], args.timeout
     )
     processing_wall = time.perf_counter() - processing_started
     stats.stop.set()
@@ -383,6 +398,21 @@ async def main() -> int:
         pages=args.pages,
         status=final.get(high_id),
     )
+    if not args.skip_ocr:
+        layout = {}
+        if scan_id and final.get(scan_id) in TERMINAL - {"FAILED"}:
+            r = await stack.client.get(
+                f"{stack.base}/documents/{scan_id}/pages/1/layout", headers=alpha
+            )
+            layout = r.json() if r.status_code == 200 else {}
+        text = " ".join(line.get("text", "") for line in layout.get("lines", []))
+        check(
+            "OCR reads a scanned page (Tesseract, default image)",
+            layout.get("source") == "ocr" and f"INV-{run_id}" in text and "1249.50" in text,
+            status=final.get(scan_id) if scan_id else None,
+            source=layout.get("source"),
+            ocr_confidence=layout.get("ocr_confidence"),
+        )
     resources = stats.summary()
     worker = resources.get("worker", {})
     check(

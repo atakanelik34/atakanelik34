@@ -40,6 +40,8 @@ jobs:
           cache: pip
           cache-dependency-path: idp/backend/pyproject.toml
       - run: pip install -e '.[dev]'
+      # Real Tesseract, so the @needs_tesseract OCR tests run instead of skipping.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng tesseract-ocr-deu
       - run: ruff check src tests migrations
       - run: ruff format --check src tests migrations
       - run: mypy
@@ -79,3 +81,10 @@ jobs:
         run: >-
           docker run --rm -e JWT_SECRET=ci-only-secret-value-that-is-long-enough-000
           idp-backend:ci python -c "import idp.main, idp.workers.main, idp.cli; idp.main.create_app()"
+      # The default image ships Tesseract: OCR a scan-like page (and any real scans
+      # committed under backend/tests/fixtures/scans) with the production digitizer.
+      - name: Real OCR inside the default image (Tesseract)
+        run: >-
+          docker run --rm -v "$PWD/idp:/src:ro" -e PYTHONPATH=/src/backend
+          -e JWT_SECRET=ci-only-secret-value-that-is-long-enough-000
+          idp-backend:ci python /src/scripts/validation/ocr_check.py

@@ -73,6 +73,11 @@ jobs:
           python-version: "3.12"
       - run: python3 -m venv backend/.venv && backend/.venv/bin/pip install -e 'backend[dev]'
       - run: python3 scripts/gen-env.py
+      # The flood measures the upload path, not the per-principal upload limit
+      # (the fault-injection job covers that), so raise it for this stack.
+      - run: sed -i 's/^UPLOAD_RATE_LIMIT_PER_MINUTE=.*/UPLOAD_RATE_LIMIT_PER_MINUTE=100000/' .env
+      # Default image (Tesseract installed, OCR_ENGINE=tesseract): the stack script's
+      # OCR check reads a scanned page through the real engine.
       - run: docker compose up -d --build
       - name: Wait for the stack
         run: timeout 600 sh -c 'until curl -fsS http://127.0.0.1:8080/api/v1/health/ready >/dev/null; do sleep 5; done'

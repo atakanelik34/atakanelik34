@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from idp.domain.documents import PDF, PNG
+from idp.domain.documents import JPEG, PDF, PNG, TIFF
 from idp.domain.errors import DocumentError
 from idp.domain.geometry import OcrStatus, TextSource
 from idp.providers.digitization.local import HybridDigitizer
@@ -145,3 +145,53 @@ async def test_tesseract_reads_scanned_pdf_and_images(tmp_path: Path) -> None:
     assert "INVOICE" in page.layout.text and "4711" in page.layout.text
     assert page.layout.ocr_confidence and page.layout.ocr_confidence > 0.6
     assert "1250.00" in image.pages[0].layout.text
+
+
+SCANS = Path(__file__).resolve().parents[1] / "fixtures" / "scans"
+
+
+def _real_scans() -> list[Path]:
+    return sorted(
+        p for p in SCANS.iterdir() if p.suffix.lower() in {".pdf", ".png", ".jpg", ".tif"}
+    )
+
+
+def _scan_pair(scan: Path) -> tuple[list[str], bytes]:
+    return scan.with_suffix(".expected.txt").read_text().split("\n"), scan.read_bytes()
+
+
+@needs_tesseract
+async def test_tesseract_reads_a_scan_like_page(tmp_path: Path) -> None:
+    """Skew, noise, blur and JPEG artefacts at 300 dpi (synthetic, see fixtures/scans)."""
+    engine = TesseractOCREngine(binary="tesseract", languages="eng", timeout_seconds=60)
+    await engine.detect_version()
+    d = _digitizer(engine)
+    try:
+        result = await _run(
+            d,
+            tmp_path,
+            files.scan_like_pdf(["Invoice INV-2026-0042", "Total due 1249.50 EUR"]),
+            PDF,
+        )
+    finally:
+        d.close()
+    page = result.pages[0].layout
+    assert page.source is TextSource.OCR
+    assert "INV-2026-0042" in page.text and "1249.50" in page.text
+
+
+@needs_tesseract
+@pytest.mark.parametrize("scan", _real_scans(), ids=lambda p: p.name)
+async def test_tesseract_reads_committed_real_scans(tmp_path: Path, scan: Path) -> None:
+    expected, data = _scan_pair(scan)
+    engine = TesseractOCREngine(binary="tesseract", languages="eng+deu", timeout_seconds=120)
+    await engine.detect_version()
+    d = _digitizer(engine)
+    mime = {".pdf": PDF, ".png": PNG, ".jpg": JPEG, ".tif": TIFF}[scan.suffix.lower()]
+    try:
+        result = await _run(d, tmp_path, data, mime)
+    finally:
+        d.close()
+    text = "\n".join(p.layout.text for p in result.pages).casefold()
+    missing = [w for w in expected if w.strip() and w.strip().casefold() not in text]
+    assert not missing
