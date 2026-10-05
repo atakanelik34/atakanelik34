@@ -17,9 +17,16 @@ read -r answer
 
 docker compose exec -T postgres sh -c 'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner' \
   < "$SOURCE/postgres.dump"
-docker compose run --rm --no-deps -T -v "$SOURCE:/backup:ro" --entrypoint /bin/sh minio-init -c \
-  'mc alias set dst http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null &&
-   mc mirror --quiet --overwrite /backup/objects "dst/$BUCKET"'
+# As root (see backup.sh); then verify every backed-up object is in the bucket.
+docker compose run --rm --no-deps -T -u 0:0 -v "$SOURCE:/backup:ro" --entrypoint /bin/sh minio-init -c \
+  'set -eu
+   mc alias set dst http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
+   mc mb --ignore-existing "dst/$BUCKET"
+   if [ -d /backup/objects ]; then mc mirror --quiet --overwrite /backup/objects "dst/$BUCKET"; fi
+   expected=$(find /backup/objects -type f 2>/dev/null | wc -l)
+   actual=$(mc ls --recursive "dst/$BUCKET" | wc -l)
+   echo "objects: backup=$expected bucket=$actual"
+   [ "$actual" -ge "$expected" ] || { echo "object restore incomplete" >&2; exit 1; }'
 # Re-apply runtime-role grants (restored tables are owned by the migration role).
 docker compose run --rm migrate
 echo "restored from $SOURCE; start the stack: docker compose up -d"

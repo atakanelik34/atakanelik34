@@ -168,7 +168,13 @@ services:
     command:
       - |
         set -eu
-        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null
+        # MinIO can report healthy and still refuse the first connections (seen on
+        # fresh volumes): retry for up to a minute instead of failing the stack.
+        tries=0
+        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; do
+          tries=$$((tries + 1)); [ "$$tries" -lt 30 ] || { echo "minio unreachable" >&2; exit 1; }
+          sleep 2
+        done
         mc mb --ignore-existing "local/$$BUCKET"
         cat > /tmp/policy.json <<EOF
         {"Version":"2012-10-17","Statement":[
