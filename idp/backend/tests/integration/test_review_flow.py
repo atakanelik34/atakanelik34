@@ -277,3 +277,84 @@ async def test_audit_log_api(
     await add_user(container, acme.owner_email, "rev@acme.test", Role.REVIEWER)
     reviewer = await login(client, "rev@acme.test", USER_PASSWORD)
     assert (await client.get("/api/v1/audit-logs", headers=reviewer)).status_code == 403
+
+
+class EchoOCR:
+    """Perfect OCR: returns the clean invoice's own text lines at confidence 1.0, so every
+    field and rule would pass - only the fact that the page was scanned remains."""
+
+    name, version, is_mock, locality = "echo-ocr", "1", True, "local"
+
+    def __init__(self, lines) -> None:  # type: ignore[no-untyped-def]
+        self.lines = lines
+
+    async def recognize(self, image, *, page_number: int):  # type: ignore[no-untyped-def]
+        from dataclasses import replace
+
+        from idp.domain.geometry import Line
+        from idp.providers.ocr.base import OCRPage
+
+        lines = tuple(
+            Line(id=line.id, words=tuple(replace(w, confidence=1.0) for w in line.words))
+            for line in self.lines
+        )
+        return OCRPage(lines=lines, mean_confidence=1.0)
+
+
+async def _native_lines(digitizer, tmp_path):  # type: ignore[no-untyped-def]
+    from idp.domain.documents import PDF
+
+    source = tmp_path / "clean.pdf"
+    source.write_bytes(files.clean_invoice_pdf())
+    result = await digitizer.digitize(source, PDF, tmp_path)
+    return [line for block in result.pages[0].layout.blocks for line in block.lines]
+
+
+async def test_scanned_documents_always_need_a_human(
+    *,
+    client: httpx.AsyncClient,
+    owner: dict[str, str],
+    container: Container,
+    digitizer,
+    make_runner,
+    tmp_path,
+) -> None:  # type: ignore[no-untyped-def]
+    """P0-2: a scanned page is reviewed even when OCR and every rule would let it through."""
+    from idp.application.steps.digitize import DigitizeStep
+    from idp.providers.digitization.local import HybridDigitizer
+
+    echo = HybridDigitizer(
+        ocr=EchoOCR(await _native_lines(digitizer, tmp_path)),  # type: ignore[arg-type]
+        workers=1,
+        timeout_seconds=60,
+        max_pages=50,
+        memory_limit_mb=2048,
+        render_dpi=72,
+        ocr_dpi=150,
+        min_native_quality=0.5,
+    )
+    try:
+        steps = {"digitize": DigitizeStep(storage=container.storage, digitizer=echo, tmp_dir=None)}
+        body = (await upload(client, owner, files.scanned_pdf(1))).json()
+        job_id, doc_id = uuid.UUID(body["job_id"]), body["document"]["id"]
+        assert await make_runner(steps).run(job_id) is RunOutcome.WAITING_FOR_REVIEW
+    finally:
+        echo.close()
+    result = (await client.get(f"/api/v1/documents/{doc_id}/extraction", headers=owner)).json()
+    part = result["parts"][0]
+    assert part["classification"]["document_type"] == "invoice"
+    assert part["fields"]["total"]["value"] == "1249.50"  # OCR text was perfect...
+    blocking = {v["rule"] for v in part["validation"] if v["outcome"] in ("REQUIRES_HUMAN", "FAIL")}
+    assert blocking == {"part:ocr"}  # ...and the scan alone requires a person
+    task = (await client.get("/api/v1/reviews", headers=owner)).json()[0]
+    await client.post(f"/api/v1/reviews/{task['id']}/claim", headers=owner)
+    approved = await client.post(
+        f"/api/v1/reviews/{task['id']}/approve", headers=owner, json={"note": "checked scan"}
+    )
+    assert approved.status_code == 204
+    assert await make_runner().run(job_id) is RunOutcome.SUCCEEDED
+    async with container.session_factory() as session:
+        approval = (
+            await session.scalars(select(ReviewAction).where(ReviewAction.action == "approve"))
+        ).one()
+    assert approval.corrected_value == {"overridden_rules": ["part:ocr"]}

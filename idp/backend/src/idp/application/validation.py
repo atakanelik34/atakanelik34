@@ -26,6 +26,37 @@ from idp.infrastructure.db.models import (
 )
 
 
+def _ocr_issues(part: DocumentPart, pages: Sequence[DocumentPage]) -> list[Issue]:
+    """Text read by OCR is always confirmed by a person (phase 13, P0-2).
+
+    Field confidence already carries OCR word confidence, but calibration on scans is
+    synthetic only (docs/validation/CALIBRATION.md: scanned amounts were wrong at
+    confidence up to 0.84), so a scanned part never completes - or reaches an ERP
+    posting - without review. Approval records the rule as overridden.
+    """
+    scanned = [
+        p.page_number
+        for p in pages
+        if part.page_start <= p.page_number <= part.page_end
+        and p.text_source == TextSource.OCR.value
+    ]
+    if not scanned:
+        return []
+    return [
+        Issue(
+            rule_id="part:ocr",
+            rule_type="ocr",
+            outcome=Outcome.REQUIRES_HUMAN,
+            fields=(),
+            message=(
+                f"Page(s) {', '.join(map(str, scanned))} were read by OCR: "
+                "a person must confirm the values"
+            ),
+            details={"pages": scanned},
+        )
+    ]
+
+
 def _page_issues(part: DocumentPart, pages: Sequence[DocumentPage]) -> list[Issue]:
     unreadable = [
         p.page_number
@@ -54,7 +85,7 @@ def _page_issues(part: DocumentPart, pages: Sequence[DocumentPage]) -> list[Issu
 async def validate_part(
     session: AsyncSession, part: DocumentPart, pages: Sequence[DocumentPage]
 ) -> list[Issue]:
-    issues = _page_issues(part, pages)
+    issues = _page_issues(part, pages) + _ocr_issues(part, pages)
     if part.schema_version_id is None:
         issues.append(
             Issue(

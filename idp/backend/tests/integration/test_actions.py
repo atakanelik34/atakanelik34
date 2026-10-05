@@ -524,3 +524,36 @@ async def test_replay_of_an_executed_action_needs_no_second_approval(
     assert second.status == "succeeded" and second.attempts == 0
     assert second.external_reference == first.external_reference
     assert (await _doc(client, owner, doc_id))["status"] == "COMPLETED"
+
+
+async def test_unbalanced_invoice_never_reaches_the_erp_without_a_human(
+    client: httpx.AsyncClient, owner: dict[str, str], container: Container, make_runner
+) -> None:  # type: ignore[no-untyped-def]
+    """P0-2: total != subtotal + tax holds the document in review before any posting, even
+    for an action configured without its own approval; the posting follows the fix."""
+    await _configure(client, owner, kind="mock_erp", requires_approval=False)
+    steps = _steps({"mock_erp": MockERPActionProvider()})
+    body = (await upload(client, owner, files.clean_invoice_pdf("1,300.00 EUR"))).json()
+    job_id, doc_id = uuid.UUID(body["job_id"]), body["document"]["id"]
+    assert await make_runner(steps).run(job_id) is RunOutcome.WAITING_FOR_REVIEW
+    assert (await client.get(f"/api/v1/documents/{doc_id}/actions", headers=owner)).json() == []
+    result = (await client.get(f"/api/v1/documents/{doc_id}/extraction", headers=owner)).json()
+    part = result["parts"][0]
+    blocking = {v["rule"] for v in part["validation"] if v["outcome"] == "REQUIRES_HUMAN"}
+    assert "rule:0:sum" in blocking
+
+    task = (await client.get("/api/v1/reviews", headers=owner)).json()[0]
+    await client.post(f"/api/v1/reviews/{task['id']}/claim", headers=owner)
+    fixed = await client.post(
+        f"/api/v1/reviews/{task['id']}/fields/{part['fields']['total']['id']}",
+        headers=owner,
+        json={"action": "edit", "value": "1249.50", "reason": "total read from the page"},
+    )
+    assert fixed.status_code == 204
+    after = (await client.get(f"/api/v1/reviews/{task['id']}", headers=owner)).json()
+    sums = [v for v in after["parts"][0]["validation"] if v["rule"] == "rule:0:sum"]
+    assert sums[0]["outcome"] == "PASS"  # re-validated on the corrected value
+    await client.post(f"/api/v1/reviews/{task['id']}/approve", headers=owner, json={})
+    assert await make_runner(steps).run(job_id) is RunOutcome.SUCCEEDED
+    [run] = (await client.get(f"/api/v1/documents/{doc_id}/actions", headers=owner)).json()
+    assert run["status"] == "succeeded" and run["payload"]["total"] == "1249.50"
