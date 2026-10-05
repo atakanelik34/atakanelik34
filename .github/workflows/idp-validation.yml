@@ -50,6 +50,9 @@ jobs:
           cache: pip
           cache-dependency-path: idp/backend/pyproject.toml
       - run: pip install -e '.[dev]'
+      # Real Tesseract: the accuracy/calibration benchmark includes scanned documents
+      # (they are skipped when the binary is missing).
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng tesseract-ocr-deu
       # Strict xfails encode known defects: the job fails if one is fixed (update the test)
       # or if any other scenario regresses.
       - run: pytest -m validation -rx -p no:logging
@@ -57,12 +60,18 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: validation-report
-          path: idp/validation-report.json
+          path: |
+            idp/validation-report.json
+            idp/calibration-report.json
 
   live-stack:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: fault-injection
+    env:
+      # Real clamd (signatures bundled in the image, refreshed by freshclam).
+      MALWARE_SCANNER: clamav
+      COMPOSE_PROFILES: av
     defaults:
       run:
         working-directory: idp
@@ -81,9 +90,14 @@ jobs:
       - run: docker compose up -d --build
       - name: Wait for the stack
         run: timeout 600 sh -c 'until curl -fsS http://127.0.0.1:8080/api/v1/health/ready >/dev/null; do sleep 5; done'
+      # Uploads fail closed (503) until clamd has loaded its signatures.
+      - name: Wait for clamd
+        run: timeout 600 sh -c 'until docker compose ps clamav --format "{{.Health}}" | grep -qx healthy; do sleep 5; done'
       - run: >-
           backend/.venv/bin/python scripts/validation/stack_validation.py
           --uploads "${{ inputs.uploads || '100' }}" --pages "${{ inputs.pages || '500' }}"
+      # Clean / EICAR / API-key path / scanner outage (stops and restarts clamav).
+      - run: backend/.venv/bin/python scripts/validation/clamav_check.py
       - if: always()
         run: docker compose logs --no-color > compose.log && docker compose down -v
       - if: always()
@@ -92,4 +106,5 @@ jobs:
           name: stack-validation-report
           path: |
             idp/stack-validation-report.json
+            idp/clamav-validation-report.json
             idp/compose.log
