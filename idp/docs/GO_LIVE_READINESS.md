@@ -1,4 +1,4 @@
-# Go-live readiness (phase 13)
+# Go-live readiness (phase 13, updated by the production-readiness follow-up)
 
 Status: **decision record** · Date: 2026-10-05 · Branch `claude/zealous-bardeen-q9cw6x`
 (head at the end of phase 13; see §3 for the commits).
@@ -13,7 +13,95 @@ Every number below was measured in this phase unless it is marked *estimate*.
 
 ---
 
-## 1. Decision
+## 0. Follow-up after phase 13 (production-readiness round)
+
+**Decision: still CONDITIONAL GO.** Every condition that could be closed from the
+repository is closed (P0-1, P0-2, F17). The remaining conditions need production
+infrastructure or real data that is not available here:
+
+* **ClamAV egress:** clamd needs outbound access in production to download signatures.
+* **Staging restore with production-like data:** the runbook is ready; the run needs
+  staging resources and credentials.
+* **Calibration on real anonymised documents:** only synthetic data has been measured.
+* **First run of `idp-validation`:** it needs a merge to `main`, which awaits your
+  approval.
+
+None of them can be verified by code changes alone.
+
+| Item | Status | What was done / evidence |
+|---|---|---|
+| P0-1 calibration thresholds | **PASS** | `subtotal` and `tax` thresholds raised 0.80 → 0.85 in the invoice template (`domain/templates.py`); thresholds are per field, per tenant schema version. `test_invoice_amount_thresholds_follow_calibration`: 0.841 → review, 0.865 → passes. No rejection threshold (insufficient data). |
+| P0-2 scanned-document safety | **PASS** | **Gap found and closed:** a scanned invoice with perfect OCR completed automatically, and would have reached an approval-free ERP action. The new part-level rule `part:ocr` (REQUIRES_HUMAN) holds every part with OCR-read pages for review; approval records it as overridden. `test_scanned_documents_always_need_a_human` fails without the change. `test_unbalanced_invoice_never_reaches_the_erp_without_a_human`: with total ≠ subtotal + tax, nothing is posted until a reviewer corrects the value; re-validation passes, then exactly one posting with the corrected total. |
+| P0-3 ClamAV | **CONDITIONAL** (config done, egress needed) | Compose passes `FRESHCLAM_CHECKS` (default 12/day; the image default was 1/day); verified running `freshclam --checks=12 --daemon`. `StreamMaxLength` 100 MB is above `MAX_UPLOAD_BYTES` (50 MB). Scan before storage: the structural test passes. Required production configuration is listed below. |
+| P0-4 staging restore | **CONDITIONAL** (runbook ready; inputs needed) | [STAGING_RESTORE_RUNBOOK.md](STAGING_RESTORE_RUNBOOK.md) plus the read-only `scripts/restore/fingerprint.sql` and `object_refs.sql`. The database half was rehearsed locally: snapshot-consistent fingerprint and dump, restore into a new database, identical over 29 tables. The rehearsal found that a production dump's grants to `idp_app` would abort a restore into a new instance, so the runbook uses `--no-privileges` followed by `provision-db-roles`. The runbook also requires cutting outbound paths (webhook/ERP/SMTP) before a staging worker starts. |
+| P0-5 CI / default branch | **PASS** (CI) / **OPEN** (merge) | `idp-ci` is green on every run from 26 to 36 (36 = the F17 commit; the workflow-only and docs-only commits are outside its path filter). `idp-validation` is defined correctly but has never executed: it can only run from `main`. It was hardened: Tesseract in the fault-injection job, ClamAV plus `clamav_check.py` in the live-stack job. With this documentation commit the branch is 39 commits ahead of `main`, 0 behind (fast-forward possible). **Not merged**: awaiting your approval. |
+| F17 (VAT rate as tax) | **PASS** (fixed) | Root cause: OCR splits a visual row into a label line and an amount line. Fix in `providers/extraction/key_value.py`: a number followed by % is never an amount, and the value is read on the same visual row before looking below. Ground-truth benchmark with real Tesseract: scanned field accuracy **76.7 % → 95.9 %**, wrong values **21 → 1** (confidence 0.33, below threshold), `total` missed 8 → 0. Native unchanged at 97.6 %. **0 wrong values at or above threshold, 0 silent errors.** |
+| F13 | **OPEN** — genuine defect, not a blocker | An LLM call cancelled by the extract step's `asyncio.wait_for` is never metered: the gateway records usage only when a call finishes. No LLM is configured, so there is no exposure today. Fix before enabling any (especially cloud) LLM tier: record a `cancelled` call with estimated input tokens in a `finally` block. |
+| F16 | **OPEN** — genuine defect, not a blocker | `HybridDigitizer._call` catches `BrokenProcessPool` and `TimeoutError` but not `MemoryError`. A render exceeding the child's `RLIMIT_AS` therefore comes back as an unclassified exception, is treated as a retryable `internal_error`, and is retried 3× before dead-letter. The worker stays protected. Fix (about 5 lines): map `MemoryError` to `ProcessingBudgetExceededError(reason="memory_limit")` and turn the strict xfail into a regression test. |
+
+**ClamAV production configuration (exact).** No credentials are involved.
+
+1. Egress from the `clamav` container:
+   * TCP 443 to `database.clamav.net`. It is served by a CDN, so allow by hostname or proxy, not by IP.
+   * DNS resolution of `current.cvd.clamav.net` (TXT record, used for the version check).
+2. Optional, through an HTTP proxy. Override file:
+
+   ```yaml
+   services:
+     clamav:
+       environment:
+         FRESHCLAM_CONF_HTTPProxyServer: proxy.internal
+         FRESHCLAM_CONF_HTTPProxyPort: "3128"
+   ```
+
+3. Optional, from a private mirror (e.g. a `cvdupdate` server). Override file:
+
+   ```yaml
+   services:
+     clamav:
+       environment:
+         FRESHCLAM_CONF_PrivateMirror: https://clamav-mirror.internal
+   ```
+
+4. Keep the `clamav-db` volume persistent, and keep `FRESHCLAM_CHECKS` between 12 and 24.
+5. Monitor signature age, and alert above 24 h:
+
+   ```bash
+   docker compose exec clamav clamscan --version
+   ```
+
+   This prints `ClamAV 1.4.x/<daily version>/<date>`. Also alert on freshclam errors
+   in `docker compose logs clamav`.
+6. Keep `MALWARE_SCANNER=clamav` (fail closed: 503 while clamd is unreachable). If
+   `MAX_UPLOAD_BYTES` is ever raised above 100 MB, also set `CLAMD_CONF_StreamMaxLength`.
+
+**Final regression on the follow-up code (2026-10-05, HEAD 37b0897 plus these docs):**
+
+| Suite | Result |
+|---|---|
+| `ruff check`, `ruff format --check`, `mypy` (156 files) | clean |
+| backend `pytest` (default) | **377 passed, 1 skipped** |
+| backend `pytest -m validation` | **38 passed, 2 xfailed** (F13, F16: strict xfails, documented above) |
+| frontend lint, typecheck, 28 tests, build | pass |
+| `stack_validation.py --uploads 100 --pages 500` (rebuilt images, OCR and ClamAV on) | **PASS 9/9.** Flood 125 uploads at 25.8/s, p95 4.8 s; isolation 0 leaks (API and `idp_app`); 46 MB accepted in 8.7 s; 85 MB → 413; 500 pages; OCR page `source=ocr`, confidence 0.94, held for review; 103 documents, 69.9/min, 0 failed jobs |
+| `clamav_check.py` | **PASS 6/6** (EICAR rejected before storage: document count unchanged; scanner down → 503; recovers) |
+| `stack_benchmark.py` (84 documents, live worker) | 99.0 documents/min, processing p95 4.3 s; status mix unchanged (35 completed, 46 review, 3 failed by design). Scanned fields in the running worker: correct **112 → 140**, wrong **21 → 1**, missed 13 → 5; native unchanged (571 correct, 0 wrong) |
+| `idp-ci` run 36 | green |
+
+**Open conditions (unchanged from §1.1 unless noted):**
+1. Calibration on real data is still required. The thresholds have been applied to the
+   template. **Existing tenant schemas** created before this change keep 0.80 until the
+   tenant publishes a new version:
+   * In the UI: Document types → invoice → edit draft → `tax`/`subtotal` confidence threshold 0.85 → publish.
+   * Through the API: `PUT /document-types/{id}/draft`, then `POST /document-types/{id}/publish`.
+2. ClamAV egress: the configuration above.
+3. Review capacity for scans: now **guaranteed 100 % review** by `part:ocr`, rather than observed.
+4. Staging restore: follow the runbook.
+5. `idp-validation`: merge to `main`, then trigger it once.
+
+---
+
+## 1. Decision (phase 13)
 
 **CONDITIONAL GO.**
 
