@@ -33,7 +33,7 @@ per document by a routing engine that respects a local-first data policy.
 | 11 | Actions: approval-gated, idempotent business actions (signed webhook, SMTP, labelled mock ERP), transactional outbox with subscribed webhooks, API keys and Inbox | ✅ |
 | 12 | Hardening: Postgres RLS + runtime DB role, ClamAV, per-principal rate limits, Prometheus metrics, optional OpenTelemetry, operations dashboard, non-root read-only containers with resource limits, backups, security review, Compose E2E | ✅ |
 
-All roadmap phases are implemented. Screenshots from the Compose end-to-end run are in [`docs/screenshots/`](docs/screenshots).
+All roadmap phases are implemented. Screenshots from the Compose end-to-end run are in [`docs/screenshots/`](docs/screenshots). Before go-live, run the [production validation test plan](docs/PRODUCTION_VALIDATION.md).
 
 ## Quick start (Docker)
 
