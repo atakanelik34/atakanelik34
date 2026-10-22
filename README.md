@@ -101,7 +101,7 @@ company layer     Compaly     AI-native company operations (in development)
 <br />
 
 <div align="center">
-  <img src="https://github-readme-stats.vercel.app/api?username=atakanelik34&show_icons=true&theme=github_dark&hide_border=true&bg_color=0B1220&title_color=E5E7EB&text_color=9CA3AF&icon_color=22C55E" alt="Atakan's GitHub stats" />
+  <img src="https://streak-stats.demolab.com?user=atakanelik34&theme=github-dark-blue&hide_border=true&background=0B1220&ring=22C55E&fire=22C55E&currStreakLabel=E5E7EB" alt="Atakan's GitHub contributions, including private repositories" />
 </div>
 
 ---
