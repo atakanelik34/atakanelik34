@@ -15,49 +15,37 @@
 
 ## Building the operating layer for autonomous agents
 
-I'm Atakan Elik, founder of **ReARC Labs**. I build infrastructure for agents that need to remember, browse, verify, and act with accountability.
+I'm Atakan Elik, founder of **ReARC Labs**. I build infrastructure for agents that need to remember, read the web, and keep state that people can inspect.
 
-The thesis is simple: capable agents need more than model calls. They need durable state, source-grounded internet access, verifiable execution records, and trust surfaces that humans can inspect.
+The thesis is simple: capable agents need more than model calls. They need durable, verifiable memory, reliable access to the web, and records that humans can check and roll back.
 
 <table>
 <tr>
-<td width="33%" valign="top">
+<td width="50%" valign="top">
 
 ### Bilinc
 
-Verifiable agent memory and state.
+Verifiable memory for AI agents.
 
-- recall, claims, contradictions
-- provenance-aware memory
-- local-first agent brain
+- commit, recall and revise agent state
+- provenance, snapshots, diff and rollback
+- hosted MCP connector, Python SDK and CLI
 
-[Website →](https://bilinc.space) · [GitHub →](https://github.com/atakanelik34/Bilinc)
+[Website →](https://bilinc.space) · [GitHub →](https://github.com/atakanelik34/Bilinc) · [PyPI →](https://pypi.org/project/bilinc/)
 
 </td>
-<td width="33%" valign="top">
+<td width="50%" valign="top">
 
 ### Clawifi
 
-Internet gateway for AI agents.
+Web reading for AI agents.
 
-- search, fetch, browser sessions
-- structured extraction
-- OSINT and MCP tools
+- search the web, fetch and scrape pages and PDFs
+- map and crawl sites
+- only the passages that answer a question
+- remote MCP server, try it without a key
 
-[Website →](https://clawifi.qzz.io)
-
-</td>
-<td width="33%" valign="top">
-
-### ARES Protocol
-
-Reputation and accountability for autonomous agents.
-
-- AgentID and operator binding
-- signed scorecards
-- execution receipts
-
-[Website →](https://ares-protocol.xyz)
+[Website →](https://clawifi.dev) · [GitHub →](https://github.com/atakanelik34/clawifi-mcp) · [PyPI →](https://pypi.org/project/clawifi/)
 
 </td>
 </tr>
@@ -66,20 +54,17 @@ Reputation and accountability for autonomous agents.
 ## Current focus
 
 ```txt
-memory layer      Bilinc      durable agent state, recall, claims, provenance
-web layer         Clawifi     search, browser, extraction, OSINT, MCP
-trust layer       ARES        reputation, scorecards, execution accountability
-product layer     Docly       document intelligence and workflow automation
-company layer     Compaly     AI-native company operations
+memory layer      Bilinc      durable agent state, recall, provenance, rollback
+web layer         Clawifi     search, fetch, crawl, passages that answer, MCP
+company layer     Compaly     AI-native company operations (in development)
 ```
 
 ## Product surfaces
 
-- [ReARC Labs](https://rearclabs.com) — trust infrastructure for autonomous agents
+- [ReARC Labs](https://rearclabs.com) — the company behind these products
 - [Bilinc](https://bilinc.space) — verifiable memory for AI agents
-- [ARES Protocol](https://ares-protocol.xyz) — trust and accountability for autonomous agents
-- [Docly](https://docly.work) — file tools for humans and agents
-- [Clawifi](https://clawifi.qzz.io) — web research and data collection for agents
+- [Clawifi](https://clawifi.dev) — web reading for AI agents
+- [ARES Protocol](https://ares-protocol.xyz) — agent reputation research (paused)
 
 ## Stack I keep close
 
@@ -91,7 +76,6 @@ company layer     Compaly     AI-native company operations
   <img src="https://img.shields.io/badge/PostgreSQL-0B1220?style=flat-square&logo=postgresql&logoColor=4169E1" />
   <img src="https://img.shields.io/badge/SQLite-0B1220?style=flat-square&logo=sqlite&logoColor=003B57" />
   <img src="https://img.shields.io/badge/Docker-0B1220?style=flat-square&logo=docker&logoColor=2496ED" />
-  <img src="https://img.shields.io/badge/Base-0B1220?style=flat-square&logo=ethereum&logoColor=white" />
 </p>
 
 ## Selected public work
@@ -100,12 +84,17 @@ company layer     Compaly     AI-native company operations
   <a href="https://pepy.tech/projects/bilinc">
     <img alt="Bilinc PyPI downloads" src="https://static.pepy.tech/badge/bilinc" />
   </a>
+  <a href="https://pypi.org/project/clawifi/">
+    <img alt="Clawifi on PyPI" src="https://img.shields.io/pypi/v/clawifi?style=flat-square&label=clawifi&color=0B1220" />
+  </a>
   <img alt="Hugging Face Istanbul speaker" src="https://img.shields.io/badge/Hugging%20Face%20Istanbul-speaker-FFD21E?style=flat-square&logo=huggingface&logoColor=111827" />
-  <img alt="Claude Partner Network initial review cleared" src="https://img.shields.io/badge/Claude%20Partner%20Network-initial%20review%20cleared-0B1220?style=flat-square" />
 </p>
 
 <a href="https://github.com/atakanelik34/Bilinc">
   <img align="center" src="https://github-readme-stats.vercel.app/api/pin/?username=atakanelik34&repo=Bilinc&theme=github_dark&hide_border=true&bg_color=0B1220&title_color=E5E7EB&text_color=9CA3AF&icon_color=22C55E" />
+</a>
+<a href="https://github.com/atakanelik34/clawifi-mcp">
+  <img align="center" src="https://github-readme-stats.vercel.app/api/pin/?username=atakanelik34&repo=clawifi-mcp&theme=github_dark&hide_border=true&bg_color=0B1220&title_color=E5E7EB&text_color=9CA3AF&icon_color=38BDF8" />
 </a>
 
 <br />
