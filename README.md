@@ -1,23 +1,32 @@
 <div align="center">
-  <img src="./assets/rearc-agent-layer.png" alt="Atakan Elik — ReARC Labs agent infrastructure" width="100%" />
+  <img src="./assets/rearc-agent-layer.png" alt="Atakan Elik, ReARC Labs. Trust infrastructure for autonomous agents. Bilinc: verifiable memory for agents. Clawifi: web access for agents. Compaly: AI company operations." width="100%" />
 </div>
 
-<br />
+## Atakan Elik, founder of ReARC Labs
 
-<div align="center">
+I run [ReARC Labs Inc.](https://rearclabs.com) We build trust infrastructure for autonomous agents: what agents need before they can be trusted to act on their own. Today that is two products: **Bilinc**, verifiable memory for AI agents, and **Clawifi**, web access for AI agents.
 
-[![ReARC Labs](https://img.shields.io/badge/ReARC%20Labs-operating%20layer%20for%20agents-0B1220?style=for-the-badge)](https://rearclabs.com)
-[![Python](https://img.shields.io/badge/Python-agent%20systems-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-product%20surfaces-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![MCP](https://img.shields.io/badge/MCP-tool%20native%20agents-111827?style=for-the-badge)](https://modelcontextprotocol.io/)
+ReARC Labs is the team behind Bilinc and Clawifi. It is not related to Rearc (rearc.io).
 
-</div>
+## Try it
 
-## Building the operating layer for autonomous agents
+```bash
+# Bilinc. Free tier, no card required. The login step opens your browser.
+pip install -U bilinc
+bilinc login
+bilinc quicktest
 
-I'm Atakan Elik, founder of **ReARC Labs**. I build infrastructure for agents that need to remember, read the web, and keep state that people can inspect.
+# Bilinc in Claude Code. You sign in through the browser.
+claude mcp add --transport http --scope user bilinc https://mcp.bilinc.space/mcp
 
-The thesis is simple: capable agents need more than model calls. They need durable, verifiable memory, reliable access to the web, and records that humans can check and roll back.
+# Clawifi in Claude Code. The hosted server works without a key as a trial.
+claude mcp add --transport http clawifi https://api.clawifi.dev/mcp
+
+# Clawifi Python client
+pip install clawifi
+```
+
+Nothing to install: the [Clawifi Playground](https://clawifi.dev/playground) runs with no sign-up.
 
 <table>
 <tr>
@@ -25,84 +34,55 @@ The thesis is simple: capable agents need more than model calls. They need durab
 
 ### Bilinc
 
-Verifiable memory for AI agents.
+Bilinc is verifiable memory for AI agents, made by ReARC Labs. It is a company brain your agents share: it keeps what they learn current, shows who wrote what, and lets you undo it.
 
-- commit, recall and revise agent state
-- provenance, snapshots, diff and rollback
-- hosted MCP connector, Python SDK and CLI
+- durable hosted memory with provenance, history and rollback
+- Python SDK, CLI and MCP connector, with setup guides for Claude Code, Codex, Cursor, ChatGPT, Claude Desktop and Hermes Agent
+- read your agent's memory as a folder of Markdown
 
-[Website →](https://bilinc.space) · [GitHub →](https://github.com/atakanelik34/Bilinc) · [PyPI →](https://pypi.org/project/bilinc/)
+[bilinc.space](https://bilinc.space) · [Install Bilinc](https://bilinc.space/install) · [Bilinc on GitHub](https://github.com/atakanelik34/Bilinc) · [Bilinc on PyPI](https://pypi.org/project/bilinc/)
 
 </td>
 <td width="50%" valign="top">
 
 ### Clawifi
 
-Web reading for AI agents.
+Clawifi is web access for AI agents, made by ReARC Labs. It searches many engines as one, reads pages and PDFs, and gives back the passages that answer the question, each with its source.
 
-- search the web, fetch and scrape pages and PDFs
-- map and crawl sites
-- only the passages that answer a question
-- remote MCP server, try it without a key
+- search, fetch, scrape, map, crawl and browse, plus batch jobs and monitors
+- hosted remote MCP, Python SDK, CLI and HTTP API
+- public beta; the Free plan includes 1,000 credits a month
 
-[Website →](https://clawifi.dev) · [GitHub →](https://github.com/atakanelik34/clawifi-mcp) · [PyPI →](https://pypi.org/project/clawifi/)
+[clawifi.dev](https://clawifi.dev) · [Clawifi quickstart](https://clawifi.dev/docs/quickstart) · [clawifi-mcp on GitHub](https://github.com/atakanelik34/clawifi-mcp) · [Clawifi on PyPI](https://pypi.org/project/clawifi/)
 
 </td>
 </tr>
 </table>
 
-## Current focus
+## More repos
 
-```txt
-memory layer      Bilinc      durable agent state, recall, provenance, rollback
-web layer         Clawifi     search, fetch, crawl, passages that answer, MCP
-company layer     Compaly     AI-native company operations (in development)
-```
+- [Bilinc Memory History](https://github.com/atakanelik34/bilinc-memory-history) keeps a local history of the memory files Claude Code and Hermes Agent write. See what changed, and put an old version back. Open source, MIT.
+- Bilinc plugins: [bilinc-cursor-plugin](https://github.com/atakanelik34/bilinc-cursor-plugin) · [bilinc-claude-plugin](https://github.com/ReARCLabs/bilinc-claude-plugin) · [bilinc-hermes-plugin](https://github.com/ReARCLabs/bilinc-hermes-plugin)
+- Clawifi plugin: [clawifi-claude-plugin](https://github.com/ReARCLabs/clawifi-claude-plugin)
 
-## Product surfaces
-
-- [ReARC Labs](https://rearclabs.com) — the company behind these products
-- [Bilinc](https://bilinc.space) — verifiable memory for AI agents
-- [Clawifi](https://clawifi.dev) — web reading for AI agents
-- [ARES Protocol](https://ares-protocol.xyz) — agent reputation research (paused)
-
-## Stack I keep close
-
-<p>
-  <img src="https://img.shields.io/badge/Python-0B1220?style=flat-square&logo=python&logoColor=3776AB" />
-  <img src="https://img.shields.io/badge/TypeScript-0B1220?style=flat-square&logo=typescript&logoColor=3178C6" />
-  <img src="https://img.shields.io/badge/FastAPI-0B1220?style=flat-square&logo=fastapi&logoColor=009688" />
-  <img src="https://img.shields.io/badge/Next.js-0B1220?style=flat-square&logo=nextdotjs&logoColor=white" />
-  <img src="https://img.shields.io/badge/PostgreSQL-0B1220?style=flat-square&logo=postgresql&logoColor=4169E1" />
-  <img src="https://img.shields.io/badge/SQLite-0B1220?style=flat-square&logo=sqlite&logoColor=003B57" />
-  <img src="https://img.shields.io/badge/Docker-0B1220?style=flat-square&logo=docker&logoColor=2496ED" />
-</p>
-
-## Selected public work
+Also at ReARC Labs: Compaly, AI company operations, is in development. ARES Protocol, an identity for each agent and a public record of what it did, is paused.
 
 <p>
   <a href="https://pepy.tech/projects/bilinc">
-    <img alt="Bilinc PyPI downloads" src="https://static.pepy.tech/badge/bilinc" />
+    <img alt="Bilinc downloads on PyPI" src="https://static.pepy.tech/badge/bilinc" />
+  </a>
+  <a href="https://pypi.org/project/bilinc/">
+    <img alt="Bilinc version on PyPI" src="https://img.shields.io/pypi/v/bilinc?style=flat-square&label=bilinc&color=0B1220" />
   </a>
   <a href="https://pypi.org/project/clawifi/">
-    <img alt="Clawifi on PyPI" src="https://img.shields.io/pypi/v/clawifi?style=flat-square&label=clawifi&color=0B1220" />
+    <img alt="Clawifi version on PyPI" src="https://img.shields.io/pypi/v/clawifi?style=flat-square&label=clawifi&color=0B1220" />
   </a>
   <img alt="Hugging Face Istanbul speaker" src="https://img.shields.io/badge/Hugging%20Face%20Istanbul-speaker-FFD21E?style=flat-square&logo=huggingface&logoColor=111827" />
 </p>
 
-<a href="https://github.com/atakanelik34/Bilinc">
-  <img align="center" src="https://github-readme-stats.vercel.app/api/pin/?username=atakanelik34&repo=Bilinc&theme=github_dark&hide_border=true&bg_color=0B1220&title_color=E5E7EB&text_color=9CA3AF&icon_color=22C55E" />
-</a>
-<a href="https://github.com/atakanelik34/clawifi-mcp">
-  <img align="center" src="https://github-readme-stats.vercel.app/api/pin/?username=atakanelik34&repo=clawifi-mcp&theme=github_dark&hide_border=true&bg_color=0B1220&title_color=E5E7EB&text_color=9CA3AF&icon_color=38BDF8" />
-</a>
+## Elsewhere
 
-<br />
-<br />
-
-<div align="center">
-  <img src="https://streak-stats.demolab.com?user=atakanelik34&theme=github-dark-blue&hide_border=true&background=0B1220&ring=22C55E&fire=22C55E&currStreakLabel=E5E7EB" alt="Atakan's GitHub contributions, including private repositories" />
-</div>
+[Atakan Elik on X](https://x.com/AtakanElik_) · [Atakan Elik on LinkedIn](https://www.linkedin.com/in/atakanelik) · [ReARC Labs on GitHub](https://github.com/ReARCLabs) · [ReARC Labs on X](https://x.com/rearclabs) · [ReARC Labs on LinkedIn](https://www.linkedin.com/company/rearclabs)
 
 ---
 
